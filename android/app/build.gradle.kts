@@ -29,7 +29,6 @@ android {
         debug {
             // The CI workflow builds this variant; it's signed with the
             // auto-generated debug key, which is fine for sideloading.
-            applicationIdSuffix = ""
             isMinifyEnabled = false
         }
         release {

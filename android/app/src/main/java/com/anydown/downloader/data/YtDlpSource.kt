@@ -184,7 +184,6 @@ object YtDlpSource {
             acodec = format.acodec,
             fileSize = format.fileSize.takeIf { it > 0 },
             bitrateKbps = bitrate?.toDouble(),
-            protocol = format.protocol,
         )
     }
 

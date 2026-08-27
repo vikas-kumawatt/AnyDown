@@ -30,8 +30,11 @@
         android:enableOnBackInvokedCallback="true"
         tools:targetApi="33"
         android:usesCleartextTraffic="false"
-        android:requestLegacyExternalStorage="true"
-        android:extractNativeLibs="true">
+        android:requestLegacyExternalStorage="true">
+        <!-- youtubedl-android's docs say to set android:extractNativeLibs here,
+             but AGP 8 warns about that and wants it in the build file instead.
+             app/build.gradle.kts sets packaging.jniLibs.useLegacyPackaging,
+             which is the same thing and takes precedence. -->
 
         <activity
             android:name=".MainActivity"

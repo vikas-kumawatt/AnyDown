@@ -12,14 +12,14 @@ import org.junit.Test
 class FormatPlannerTest {
 
     private fun youtubeFormats() = listOf(
-        RawFormat("140", "m4a", null, "none", "mp4a.40.2", 3_400_000, 129.0, "https"),
-        RawFormat("251", "webm", null, "none", "opus", 3_200_000, 120.0, "https"),
-        RawFormat("137", "mp4", 1080, "avc1.640028", "none", 60_000_000, 4200.0, "https"),
-        RawFormat("248", "webm", 1080, "vp9", "none", 45_000_000, 3000.0, "https"),
-        RawFormat("18", "mp4", 360, "avc1.42001E", "mp4a.40.2", 18_000_000, 700.0, "https"),
-        RawFormat("271", "webm", 1440, "vp9", "none", 150_000_000, 9000.0, "https"),
+        RawFormat("140", "m4a", null, "none", "mp4a.40.2", 3_400_000, 129.0),
+        RawFormat("251", "webm", null, "none", "opus", 3_200_000, 120.0),
+        RawFormat("137", "mp4", 1080, "avc1.640028", "none", 60_000_000, 4200.0),
+        RawFormat("248", "webm", 1080, "vp9", "none", 45_000_000, 3000.0),
+        RawFormat("18", "mp4", 360, "avc1.42001E", "mp4a.40.2", 18_000_000, 700.0),
+        RawFormat("271", "webm", 1440, "vp9", "none", 150_000_000, 9000.0),
         // Storyboard pseudo-format: must be ignored.
-        RawFormat("sb0", "mhtml", 90, "none", "none", null, null, "mhtml"),
+        RawFormat("sb0", "mhtml", 90, "none", "none", null, null),
     )
 
     @Test
@@ -80,7 +80,7 @@ class FormatPlannerTest {
     @Test
     fun `missing codec fields are treated as a self-contained stream`() {
         val tiktok = listOf(
-            RawFormat("download", "mp4", 1024, null, null, 2_500_000, null, "https")
+            RawFormat("download", "mp4", 1024, null, null, 2_500_000, null)
         )
         val options = FormatPlanner.plan(tiktok, 15.0)
         assertEquals(1, options.size)
@@ -91,7 +91,7 @@ class FormatPlannerTest {
     @Test
     fun `size is estimated from bitrate when absent`() {
         val formats = listOf(
-            RawFormat("hls-720", "mp4", 720, "avc1.4d401f", "mp4a.40.2", null, 1800.0, "m3u8_native")
+            RawFormat("hls-720", "mp4", 720, "avc1.4d401f", "mp4a.40.2", null, 1800.0)
         )
         val option = FormatPlanner.plan(formats, 60.0).first()
         assertEquals((1800.0 * 1000 / 8 * 60).toLong(), option.sizeBytes)
@@ -99,21 +99,21 @@ class FormatPlannerTest {
 
     @Test
     fun `size is null when neither filesize nor bitrate is known`() {
-        val formats = listOf(RawFormat("x", "mp4", 720, "avc1", "mp4a", null, null, "https"))
+        val formats = listOf(RawFormat("x", "mp4", 720, "avc1", "mp4a", null, null))
         assertNull(FormatPlanner.plan(formats, null).first().sizeBytes)
     }
 
     @Test
     fun `video with no audio to pair is skipped`() {
         val formats = listOf(
-            RawFormat("137", "mp4", 1080, "avc1", "none", 60_000_000, 4200.0, "https")
+            RawFormat("137", "mp4", 1080, "avc1", "none", 60_000_000, 4200.0)
         )
         assertTrue(FormatPlanner.plan(formats, 212.0).isEmpty())
     }
 
     @Test
     fun `formats with both codecs absent are rejected`() {
-        val formats = listOf(RawFormat("junk", "mp4", 100, "none", "none", 1000, null, "https"))
+        val formats = listOf(RawFormat("junk", "mp4", 100, "none", "none", 1000, null))
         assertTrue(FormatPlanner.plan(formats, 10.0).isEmpty())
     }
 
@@ -124,7 +124,7 @@ class FormatPlannerTest {
 
     @Test
     fun `unknown resolution still gets offered`() {
-        val formats = listOf(RawFormat("only", "mp4", null, "avc1", "mp4a", 500, null, "https"))
+        val formats = listOf(RawFormat("only", "mp4", null, "avc1", "mp4a", 500, null))
         val option = FormatPlanner.plan(formats, null).first()
         assertEquals("Original quality (MP4)", option.label)
     }

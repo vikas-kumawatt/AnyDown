@@ -16,7 +16,13 @@ package com.anydown.downloader.domain
  */
 object FormatPlanner {
 
-    /** One entry from yt-dlp's `formats` array, reduced to what we use. */
+    /**
+     * One entry from yt-dlp's `formats` array, reduced to what we use.
+     *
+     * No `protocol` field, unlike the server version's equivalent: there it
+     * decided between proxying bytes directly and routing through ffmpeg. On
+     * device, yt-dlp handles HLS/DASH itself, so the distinction never surfaces.
+     */
     data class RawFormat(
         val formatId: String,
         val ext: String?,
@@ -25,7 +31,6 @@ object FormatPlanner {
         val acodec: String?,
         val fileSize: Long?,
         val bitrateKbps: Double?,
-        val protocol: String?,
     )
 
     enum class Kind { PROGRESSIVE, MERGE, AUDIO }
