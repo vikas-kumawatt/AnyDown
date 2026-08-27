@@ -20,10 +20,6 @@ object ThreadsParser {
         """https?://[^"'\\\s]+?\.mp4[^"'\\\s]*""",
         RegexOption.IGNORE_CASE,
     )
-    private val IMAGE_URL = Regex(
-        """https?://[^"'\\\s]+?\.(?:jpg|jpeg|webp|png)[^"'\\\s]*""",
-        RegexOption.IGNORE_CASE,
-    )
     private val META = Regex(
         """<meta[^>]+(?:property|name)=["']([^"']+)["'][^>]+content=["']([^"']*)["']""",
         RegexOption.IGNORE_CASE,
@@ -97,8 +93,11 @@ object ThreadsParser {
         }
 
         if (found.isEmpty()) {
+            // Only accept og:image when it's on Meta's media CDN. Matching any
+            // image URL would defeat the point — a site logo or an OpenGraph
+            // placeholder is not the post's media.
             val fromMeta = meta["og:image"]?.takeIf { url ->
-                IMAGE_URL.matches(url) || CDN_HINTS.any { it in url }
+                CDN_HINTS.any { it in url }
             }
             if (fromMeta != null) {
                 found.putIfAbsent(stripQuery(fromMeta), media(fromMeta, null, FormatPlanner.Kind.IMAGE))

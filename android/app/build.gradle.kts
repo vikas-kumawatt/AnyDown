@@ -75,8 +75,8 @@ android {
         // git tag minus its "v". versionCode must only ever increase — Android
         // refuses to install an APK whose versionCode is lower than the one
         // already on the device.
-        versionCode = 5
-        versionName = "1.4.0"
+        versionCode = 6
+        versionName = "1.5.1"
 
         // youtubedl-android ships a Python runtime and yt-dlp/ffmpeg binaries per
         // ABI. Every ABI you keep is roughly another 25-35 MB of APK. arm64-v8a
