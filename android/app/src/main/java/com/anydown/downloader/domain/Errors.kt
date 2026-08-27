@@ -9,9 +9,14 @@ package com.anydown.downloader.domain
  */
 object Errors {
 
-    enum class Code { UNSUPPORTED_URL, PRIVATE_CONTENT, GONE, NETWORK, FAILED }
+    enum class Code { UNSUPPORTED_URL, PRIVATE_CONTENT, GONE, NETWORK, NEEDS_FFMPEG, FAILED }
 
-    data class Classified(val code: Code, val message: String)
+    /**
+     * [detail] carries yt-dlp's own words. The friendly [message] is what the UI
+     * leads with, but a personal tool should never hide the real error — when a
+     * platform breaks, that raw line is the only thing that tells you why.
+     */
+    data class Classified(val code: Code, val message: String, val detail: String? = null)
 
     private val PRIVATE_PATTERNS = listOf(
         "private", "login required", "log in", "sign in", "requires authentication",
@@ -38,30 +43,41 @@ object Errors {
     private val ANSI = Regex("\\[[0-9;]*m")
 
     fun classify(raw: String?): Classified {
-        val text = ANSI.replace(raw ?: "", "").lowercase()
+        val clean = ANSI.replace(raw ?: "", "").trim().ifEmpty { null }
+        val text = (clean ?: "").lowercase()
 
         UNSUPPORTED_PATTERNS.firstOrNull { text.contains(it) }?.let {
             return Classified(
                 Code.UNSUPPORTED_URL,
-                "This link isn't from a supported platform, or isn't a media page.",
+                "yt-dlp has no extractor for this site, or this isn't a media page.",
+                clean,
             )
         }
         PRIVATE_PATTERNS.firstOrNull { text.contains(it) }?.let {
             return Classified(
                 Code.PRIVATE_CONTENT,
-                "This content isn't publicly viewable. Only public content is supported.",
+                "This content isn't publicly viewable. Only public content works.",
+                clean,
             )
         }
         GONE_PATTERNS.firstOrNull { text.contains(it) }?.let {
-            return Classified(Code.GONE, "The platform says this content no longer exists.")
+            return Classified(
+                Code.GONE,
+                "The platform says this content no longer exists.",
+                clean,
+            )
         }
         NETWORK_PATTERNS.firstOrNull { text.contains(it) }?.let {
-            return Classified(Code.NETWORK, "Network problem. Check your connection and retry.")
+            return Classified(
+                Code.NETWORK,
+                "Network problem. Check your connection and retry.",
+                clean,
+            )
         }
         return Classified(
             Code.FAILED,
-            "Couldn't read this link. The platform may have changed — try updating " +
-                "yt-dlp from the menu.",
+            "Couldn't read this link. If the site changed, tap Update to refresh yt-dlp.",
+            clean,
         )
     }
 }

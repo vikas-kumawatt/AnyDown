@@ -1,28 +1,35 @@
 #!/usr/bin/env python3
-"""Generate the Android launcher icons.
+"""Generate the AnyDown launcher icons.
 
-Run only when the icon design changes:
+Run only when the mark changes:
 
     pip install Pillow
     python android/scripts/generate-icons.py
 
-Produces three sets:
-  * ic_launcher_foreground  — the arrow on transparency, for the adaptive icon
-    (API 26+). Art stays inside the centre 66/108 of the canvas, which is the
-    only region guaranteed to survive the launcher's mask.
-  * ic_launcher             — legacy square icon for API 24-25.
-  * ic_launcher_round       — legacy round icon for the same.
+The geometry deliberately matches the `Mark` composable in
+app/src/main/java/com/anydown/downloader/ui/Design.kt, so the icon on the
+launcher and the mark inside the app are the same drawing.
+
+Three sets are produced:
+  * ic_launcher_foreground — white mark on transparency for the adaptive icon
+    (API 26+). Art is confined to the centre 66/108 of the canvas, the only
+    region a launcher mask is guaranteed not to crop.
+  * ic_launcher            — legacy square icon, API 24-25.
+  * ic_launcher_round      — legacy round icon, same.
+
+The wordmark from the source artwork is intentionally left out. At 48dp it
+would be an illegible smudge, and Android already prints the app name directly
+beneath the icon, so it would only be repeating itself.
 """
 
 from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-INK = (7, 11, 24, 255)
-ACCENT = (91, 140, 255, 255)
+BACKDROP = (18, 18, 20, 255)  # @color/icon_background
+MARK = (255, 255, 255, 255)
 SUPERSAMPLE = 4
 
-# mdpi, hdpi, xhdpi, xxhdpi, xxxhdpi
 LEGACY_SIZES = {
     "mipmap-mdpi": 48,
     "mipmap-hdpi": 72,
@@ -42,30 +49,58 @@ FOREGROUND_SIZES = {
 RES_DIR = Path(__file__).resolve().parents[1] / "app" / "src" / "main" / "res"
 
 
-def draw_arrow(draw: ImageDraw.ImageDraw, cx: float, cy: float, art: float) -> None:
-    """Download arrow (stem + head) above a tray line. Matches the web favicon."""
-    stem_half = art * 0.085
-    draw.rounded_rectangle(
-        [cx - stem_half, cy - art * 0.44, cx + stem_half, cy + art * 0.04],
-        radius=stem_half,
-        fill=ACCENT,
-    )
+def rounded(draw, x0, y0, x1, y1, colour):
+    """Rounded bar, radius = half the short side."""
+    radius = min(abs(x1 - x0), abs(y1 - y0)) / 2
+    draw.rounded_rectangle([x0, y0, x1, y1], radius=radius, fill=colour)
+
+
+def draw_mark(draw, cx, cy, art, colour=MARK, motion_lines=True):
+    """Arrow descending into an open tray, with motion lines to its left.
+
+    `art` is the height of the mark; `cx`/`cy` its centre.
+    """
+    # The motion lines extend well to the left of the arrow, so the arrow has to
+    # sit right of centre for the *composition* to be centred. The whole mark
+    # spans from ax - 0.905*art to ax + 0.40*art, which is balanced when the
+    # arrow is offset by a quarter of the art height.
+    ax = cx + (art * 0.25 if motion_lines else 0)
+    top = cy - art / 2
+
+    stem_w = art * 0.17
+    stem_top = top + art * 0.10
+    head_top = top + art * 0.44
+    head_half = art * 0.325
+    tip_y = top + art * 0.67
+
+    rounded(draw, ax - stem_w / 2, stem_top, ax + stem_w / 2, head_top + art * 0.02, colour)
     draw.polygon(
-        [
-            (cx - art * 0.28, cy - art * 0.04),
-            (cx + art * 0.28, cy - art * 0.04),
-            (cx, cy + art * 0.30),
-        ],
-        fill=ACCENT,
+        [(ax - head_half, head_top), (ax + head_half, head_top), (ax, tip_y)],
+        fill=colour,
     )
-    tray_half_w = art * 0.32
-    tray_half_h = art * 0.05
-    draw.rounded_rectangle(
-        [cx - tray_half_w, cy + art * 0.40 - tray_half_h,
-         cx + tray_half_w, cy + art * 0.40 + tray_half_h],
-        radius=tray_half_h,
-        fill=ACCENT,
-    )
+
+    # Tray: two arms and a base, assembled rather than stroked, because PIL has
+    # no round-capped path stroking.
+    tray_half = art * 0.40
+    tray_top = top + art * 0.58
+    tray_bottom = top + art * 0.92
+    stroke = art * 0.125
+    rounded(draw, ax - tray_half, tray_top, ax - tray_half + stroke, tray_bottom, colour)
+    rounded(draw, ax + tray_half - stroke, tray_top, ax + tray_half, tray_bottom, colour)
+    rounded(draw, ax - tray_half, tray_bottom - stroke, ax + tray_half, tray_bottom, colour)
+
+    if motion_lines:
+        line_h = art * 0.095
+        right = ax - head_half - art * 0.08
+        for y_frac, len_frac, alpha in (
+            (0.24, 0.50, 1.0),
+            (0.39, 0.35, 0.70),
+            (0.53, 0.14, 0.42),
+        ):
+            faded = (colour[0], colour[1], colour[2], int(255 * alpha))
+            length = art * len_frac
+            y = top + art * y_frac
+            rounded(draw, right - length, y, right, y + line_h, faded)
 
 
 def build(size: int, shape: str) -> Image.Image:
@@ -74,19 +109,18 @@ def build(size: int, shape: str) -> Image.Image:
     draw = ImageDraw.Draw(image)
 
     if shape == "foreground":
-        # Transparent background; the adaptive icon supplies the colour. Art is
-        # scaled to the 66/108 safe zone so masking can't clip it.
-        art = canvas * (66 / 108) * 0.82
+        # Transparent; the adaptive icon supplies the backdrop colour.
+        art = canvas * (66 / 108) * 0.88
     elif shape == "round":
-        draw.ellipse([0, 0, canvas - 1, canvas - 1], fill=INK)
-        art = canvas * 0.52
+        draw.ellipse([0, 0, canvas - 1, canvas - 1], fill=BACKDROP)
+        art = canvas * 0.50
     else:
         draw.rounded_rectangle(
-            [0, 0, canvas - 1, canvas - 1], radius=canvas * 0.16, fill=INK
+            [0, 0, canvas - 1, canvas - 1], radius=canvas * 0.235, fill=BACKDROP
         )
-        art = canvas * 0.58
+        art = canvas * 0.56
 
-    draw_arrow(draw, canvas / 2, canvas / 2, art)
+    draw_mark(draw, canvas / 2, canvas / 2, art)
     return image.resize((size, size), Image.LANCZOS)
 
 
@@ -95,7 +129,9 @@ def main() -> None:
     for folder, size in FOREGROUND_SIZES.items():
         target = RES_DIR / folder
         target.mkdir(parents=True, exist_ok=True)
-        build(size, "foreground").save(target / "ic_launcher_foreground.png", "PNG", optimize=True)
+        build(size, "foreground").save(
+            target / "ic_launcher_foreground.png", "PNG", optimize=True
+        )
         written += 1
 
     for folder, size in LEGACY_SIZES.items():

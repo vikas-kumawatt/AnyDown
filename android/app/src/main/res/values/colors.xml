@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Mirrors the web app's palette in frontend/src/index.css. -->
-    <color name="ink">#FF070B18</color>
-    <color name="accent">#FF5B8CFF</color>
+    <!-- Mirrors ui/Design.kt. Only the window chrome needs these; the app's
+         own surfaces are coloured in Compose. -->
+    <color name="paper">#FFFFFFFF</color>
+    <color name="ink">#FF0B0B0C</color>
+    <!-- Launcher icon background: near-black, matching the mark. -->
+    <color name="icon_background">#FF121214</color>
 </resources>

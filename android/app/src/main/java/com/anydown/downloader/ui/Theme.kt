@@ -1,34 +1,47 @@
 package com.anydown.downloader.ui
 
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.Typography
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.graphics.Color
 
-// Same palette as the web app (frontend/src/index.css), so the two feel like
-// one product. Dark only: this is a dark-first design and a light variant would
-// need its own contrast pass to be worth shipping.
-private val Ink = Color(0xFF070B18)
-private val Panel = Color(0xFF101729)
-private val Edge = Color(0xFF1F2A44)
-private val Accent = Color(0xFF5B8CFF)
-private val OnDark = Color(0xFFE8ECF7)
-private val Muted = Color(0xFF8E9AB8)
+/**
+ * Light-only, monochrome.
+ *
+ * Material's scheme is filled in mostly so its own components (ripples, text
+ * selection handles, the odd indicator) inherit ink rather than purple. The
+ * actual design lives in [Palette] and [Type] — screens reference those
+ * directly instead of MaterialTheme, which keeps the look from drifting back
+ * toward stock Material.
+ *
+ * No dark theme. A dark variant of a paper-white design isn't a palette swap,
+ * it's a second design, and shipping a half-considered one is worse than
+ * shipping none.
+ */
+private val Scheme = lightColorScheme(
+    primary = Palette.ink,
+    onPrimary = Palette.inkInverse,
+    secondary = Palette.ink,
+    onSecondary = Palette.inkInverse,
+    background = Palette.paper,
+    onBackground = Palette.ink,
+    surface = Palette.paper,
+    onSurface = Palette.ink,
+    surfaceVariant = Palette.surface,
+    onSurfaceVariant = Palette.inkSecondary,
+    outline = Palette.hairlineStrong,
+    outlineVariant = Palette.hairline,
+    error = Palette.danger,
+    onError = Palette.inkInverse,
+)
 
-private val Scheme = darkColorScheme(
-    primary = Accent,
-    onPrimary = Color.White,
-    background = Ink,
-    onBackground = OnDark,
-    surface = Panel,
-    onSurface = OnDark,
-    surfaceVariant = Edge,
-    onSurfaceVariant = Muted,
-    outline = Edge,
-    error = Color(0xFFFF6B81),
+private val AppTypography = Typography(
+    bodyLarge = Type.body,
+    bodyMedium = Type.small,
+    labelLarge = Type.button,
 )
 
 @Composable
 fun AnyDownTheme(content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = Scheme, content = content)
+    MaterialTheme(colorScheme = Scheme, typography = AppTypography, content = content)
 }

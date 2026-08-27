@@ -90,6 +90,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+    implementation(libs.coil.compose)
 
     implementation(libs.youtubedl.android)
     // Without this, yt-dlp can't merge separate video+audio streams, which caps

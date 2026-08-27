@@ -78,7 +78,7 @@ What did carry over is the judgement, ported to Kotlin and unit tested:
 | File | Ported from | What it decides |
 |---|---|---|
 | `domain/FormatPlanner.kt` | `backend/app/extractor.py` | Which qualities to offer, one per resolution, progressive over merge, avc1/MP4 over VP9/WebM, and the MP4-vs-MKV container call |
-| `domain/Platforms.kt` | `backend/app/platforms.py` | The nine-platform allow-list, with look-alike hosts rejected |
+| `domain/Platforms.kt` | `backend/app/platforms.py` | Naming the site behind a link, with look-alike hosts never mistaken for the real one |
 | `domain/Errors.kt` | `backend/app/errors.py` | Turning yt-dlp stderr into something readable |
 | `domain/Filenames.kt` | `backend/app/streaming.py` | Filename sanitising, size and duration formatting |
 
@@ -93,23 +93,29 @@ platform offers is listed — including 1440p and 2160p. Those are usually
 VP9/AV1, which MP4 can't hold reliably, so the label will say **MKV**. VLC plays
 them; Android's default gallery sometimes won't.
 
-**The allow-list is now a product choice, not a security control.** There's no
-server to point at an internal address, so it survives only because the PRD
-scopes this to nine platforms. yt-dlp itself supports over a thousand sites — set
-`RESTRICT_TO_ALLOW_LIST = false` in `domain/Platforms.kt` to allow them all. The
-"Detected: YouTube" hint keeps working either way.
+**Any site yt-dlp supports.** The web version's allow-list doubled as an SSRF
+control — a server must not be talked into fetching arbitrary addresses. There's
+no server here, so the gate was blocking good links for no benefit (Reddit,
+Vimeo, VK and LinkedIn never reached yt-dlp at all). Anything that parses as an
+http(s) URL is now passed straight to yt-dlp, which supports well over a
+thousand sites. `Platforms.ALL` only drives the "Detected: …" label; an unlisted
+host still works, it's just unlabelled.
 
 ---
 
 ## Known risks
 
 **ffmpeg is the weak link.** Without it yt-dlp can't merge separate video and
-audio streams, which caps most platforms near 720p. The app treats a missing
-ffmpeg as a degraded mode rather than a crash: merge options are simply hidden.
-`ffmpeg-kit` was retired and pulled from Maven in April 2025; this project uses
-the `io.github.junkfood02.youtubedl-android:ffmpeg` artifact instead, which ships
-its own binaries. **Verify on the first build that 1080p options actually
-appear** — if they don't, ffmpeg didn't initialise.
+audio streams, which caps most platforms near 720p and breaks sites that offer
+*only* separate tracks — Dailymotion and Threads among them. `ffmpeg-kit` was
+retired and pulled from Maven in April 2025; this project uses the
+`io.github.junkfood02.youtubedl-android:ffmpeg` artifact instead, which ships its
+own binaries.
+
+The app no longer hides this. When ffmpeg is missing the top bar reads
+**LIMITED**, a warning notice explains why, and a link whose every option needs
+merging reports exactly that rather than claiming no media was found. That last
+case used to look like a broken extractor and was in fact a missing ffmpeg.
 
 **The library API was written from its documentation, not a local compile.**
 `data/YtDlpSource.kt` is the only file that touches youtubedl-android, and its

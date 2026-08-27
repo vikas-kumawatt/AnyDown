@@ -146,15 +146,32 @@ object YtDlpSource {
 
             val duration = info.duration.takeIf { it > 0 }
             val raw = (info.formats ?: emptyList()).mapNotNull(::toRawFormat)
-            val options = FormatPlanner.plan(raw, duration?.toDouble())
-                .filter { canMerge || it.kind != FormatPlanner.Kind.MERGE }
+            val planned = FormatPlanner.plan(raw, duration?.toDouble())
+            val options = planned.filter { canMerge || it.kind != FormatPlanner.Kind.MERGE }
 
             if (options.isEmpty()) {
+                // Distinguish "nothing here" from "everything here needs ffmpeg
+                // and ffmpeg is missing". The second case silently broke sites
+                // that only offer separate video and audio renditions —
+                // Dailymotion and Threads among them — and reported it as if the
+                // link had no media at all.
+                val blockedByFfmpeg = planned.isNotEmpty() && !canMerge
                 throw SourceException(
-                    Errors.Classified(
-                        Errors.Code.FAILED,
-                        "No downloadable media was found at that link.",
-                    )
+                    if (blockedByFfmpeg) {
+                        Errors.Classified(
+                            Errors.Code.NEEDS_FFMPEG,
+                            "This link only offers separate video and audio tracks, " +
+                                "which need ffmpeg to combine — and ffmpeg didn't load. " +
+                                "Reinstall the app to fix it.",
+                            "${planned.size} format(s) found, all requiring a merge.",
+                        )
+                    } else {
+                        Errors.Classified(
+                            Errors.Code.FAILED,
+                            "yt-dlp read the page but found no downloadable media on it.",
+                            "${raw.size} raw format(s) reported.",
+                        )
+                    }
                 )
             }
 

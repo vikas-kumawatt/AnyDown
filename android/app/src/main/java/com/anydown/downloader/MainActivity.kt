@@ -2,9 +2,11 @@ package com.anydown.downloader
 
 import android.Manifest
 import android.content.Intent
+import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -37,7 +39,15 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+
+        // Explicitly light, not `auto`. The default picks bar icon colour from
+        // the system dark-mode setting — which on a phone in dark mode would
+        // give white icons on this paper-white page, i.e. invisible. The design
+        // is light-only, so the bars are pinned light regardless.
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.BLACK),
+            navigationBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.BLACK),
+        )
 
         // Android 13+ needs this before the foreground service notification can
         // be shown, and a foreground service is what keeps downloads alive.
@@ -72,6 +82,7 @@ class MainActivity : ComponentActivity() {
                             onCancelJob = { jobId ->
                                 DownloadService.cancel(this@MainActivity, jobId)
                             },
+                            onClearFinished = viewModel::clearFinishedJobs,
                         )
                     }
                 }
