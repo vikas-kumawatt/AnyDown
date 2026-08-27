@@ -38,6 +38,17 @@ object Platforms {
         Platform("twitch", "Twitch", listOf("twitch.tv")),
         Platform("tumblr", "Tumblr", listOf("tumblr.com")),
         Platform("soundcloud", "SoundCloud", listOf("soundcloud.com", "snd.sc")),
+        Platform("ok", "OK.ru", listOf("ok.ru", "odnoklassniki.ru")),
+        // Handled by a custom resolver rather than yt-dlp — see CustomResolvers.
+        Platform(
+            "terabox", "TeraBox",
+            listOf(
+                "terabox.com", "terabox.app", "1024terabox.com", "teraboxapp.com",
+                "teraboxlink.com", "terasharelink.com", "teraboxshare.com",
+                "4funbox.com", "mirrobox.com", "nephobox.com", "momerybox.com",
+                "tibibox.com", "freeterabox.com", "terafileshare.com",
+            ),
+        ),
     )
 
     private const val PINTEREST_PREFIX = "pinterest."

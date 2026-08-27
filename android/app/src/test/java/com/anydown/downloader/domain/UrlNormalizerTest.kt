@@ -54,6 +54,35 @@ class UrlNormalizerTest {
         )
     }
 
+    /**
+     * vimeo.com refuses anonymous extraction now ("The web client only works
+     * when logged-in"); player.vimeo.com still answers without credentials.
+     */
+    @Test
+    fun `routes vimeo through the player endpoint`() {
+        assertEquals(
+            "https://player.vimeo.com/video/1219875917",
+            UrlNormalizer.normalize("https://vimeo.com/1219875917?share=copy&fl=cl&fe=ci"),
+        )
+        assertEquals(
+            "https://player.vimeo.com/video/1219875917",
+            UrlNormalizer.normalize("https://www.vimeo.com/1219875917"),
+        )
+        // Unlisted videos carry a hash, which the player endpoint takes as ?h=
+        assertEquals(
+            "https://player.vimeo.com/video/76979871?h=8272103a63",
+            UrlNormalizer.normalize("https://vimeo.com/76979871/8272103a63"),
+        )
+    }
+
+    @Test
+    fun `leaves non-video vimeo paths alone`() {
+        assertEquals(
+            "https://vimeo.com/channels/staffpicks",
+            UrlNormalizer.normalize("https://vimeo.com/channels/staffpicks"),
+        )
+    }
+
     @Test
     fun `drops the fragment and trims`() {
         assertEquals(

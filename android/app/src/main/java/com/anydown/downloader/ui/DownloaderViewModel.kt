@@ -36,12 +36,18 @@ class DownloaderViewModel(application: Application) : AndroidViewModel(applicati
         val engineReady: Boolean = false,
         /** False when ffmpeg didn't load: quality is capped and merges fail. */
         val canMerge: Boolean = false,
+        /** Optional proxy for sites blocked at the network level. */
+        val proxy: String = "",
+        val advancedOpen: Boolean = false,
     )
 
     private val prefs = application.getSharedPreferences("anydown", Context.MODE_PRIVATE)
 
     private val _state = MutableStateFlow(
-        UiState(acknowledged = prefs.getBoolean(KEY_ACK, false))
+        UiState(
+            acknowledged = prefs.getBoolean(KEY_ACK, false),
+            proxy = YtDlpSource.getProxy(application),
+        )
     )
     val state: StateFlow<UiState> = _state.asStateFlow()
 
@@ -122,6 +128,16 @@ class DownloaderViewModel(application: Application) : AndroidViewModel(applicati
                     _state.update { it.copy(notice = null, error = classify(error)) }
                 }
         }
+    }
+
+    fun toggleAdvanced() {
+        _state.update { it.copy(advancedOpen = !it.advancedOpen) }
+    }
+
+    /** Persisted immediately so it survives the app being killed mid-edit. */
+    fun onProxyChange(proxy: String) {
+        YtDlpSource.setProxy(getApplication(), proxy)
+        _state.update { it.copy(proxy = proxy) }
     }
 
     fun clearFinishedJobs() = DownloadBus.clearFinished()

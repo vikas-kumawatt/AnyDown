@@ -7,6 +7,7 @@ import android.util.Log
 import com.anydown.downloader.domain.Errors
 import com.anydown.downloader.domain.Filenames
 import com.anydown.downloader.domain.FormatPlanner
+import com.anydown.downloader.domain.HeaderBlob
 import com.anydown.downloader.domain.UrlNormalizer
 import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
@@ -48,6 +49,7 @@ object YtDlpSource {
     private const val OUTPUT_SUBDIR = "AnyDown"
     private const val PREFS = "anydown"
     private const val KEY_LAST_UPDATE = "ytdlp_last_update"
+    private const val KEY_PROXY = "proxy_url"
     private const val UPDATE_INTERVAL_MS = 24L * 60 * 60 * 1000
     private const val REDIRECT_TIMEOUT_MS = 12_000
 
@@ -57,6 +59,36 @@ object YtDlpSource {
 
     /** True once init succeeded and yt-dlp can merge separate streams. */
     val canMerge: Boolean get() = ffmpegAvailable
+
+    /**
+     * Optional proxy, applied to every yt-dlp request.
+     *
+     * Some sites fail with `[Errno 104] Connection reset by peer` before any
+     * extraction happens — the connection is being refused at the network
+     * level, not by the site. TikTok is blocked by ISPs in several countries,
+     * India among them, and ok.ru is blocked in others. No extractor fix helps
+     * with that; routing the request elsewhere does.
+     *
+     * Accepts anything yt-dlp does, e.g. `socks5://127.0.0.1:1080` or
+     * `http://user:pass@host:3128`.
+     */
+    fun getProxy(context: Context): String =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_PROXY, "") ?: ""
+
+    fun setProxy(context: Context, proxy: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putString(KEY_PROXY, proxy.trim()).apply()
+    }
+
+    /** Options applied to every request: proxy, geo-bypass, playlist guard. */
+    private fun YoutubeDLRequest.applyCommonOptions(context: Context) {
+        addOption("--no-playlist")
+        addOption("--no-warnings")
+        // Cheap to ask for, and gets past some region locks on its own.
+        addOption("--geo-bypass")
+        getProxy(context).takeIf { it.isNotBlank() }?.let { addOption("--proxy", it) }
+    }
 
     class SourceException(
         val classified: Errors.Classified,
@@ -229,10 +261,22 @@ object YtDlpSource {
             val url = prepareUrl(rawUrl)
             if (url != rawUrl.trim()) Log.i(TAG, "normalised to $url")
 
-            val request = YoutubeDLRequest(url).apply {
-                addOption("--no-playlist")
-                addOption("--no-warnings")
+            // Sites yt-dlp has no extractor for get resolved by hand first.
+            // Returning null falls through, so this can only ever help.
+            if (CustomResolvers.handles(url)) {
+                CustomResolvers.resolve(url, getProxy(context))?.let { direct ->
+                    return@withContext Resolved(
+                        title = direct.title,
+                        thumbnail = direct.thumbnail,
+                        durationSeconds = direct.durationSeconds,
+                        uploader = direct.uploader,
+                        options = FormatPlanner.fromDirect(direct),
+                    )
+                }
+                Log.i(TAG, "custom resolver found nothing; falling back to yt-dlp")
             }
+
+            val request = YoutubeDLRequest(url).apply { applyCommonOptions(context) }
 
             val info: VideoInfo = try {
                 YoutubeDL.getInstance().getInfo(request)
@@ -242,8 +286,9 @@ object YtDlpSource {
 
             val duration = info.duration.takeIf { it > 0 }
             val raw = (info.formats ?: emptyList()).mapNotNull(::toRawFormat)
-            val planned = FormatPlanner.plan(raw, duration?.toDouble())
-            val options = planned.filter { canMerge || it.kind != FormatPlanner.Kind.MERGE }
+            // The planner now owns the ffmpeg decision, so merge-dependent
+            // options are never offered when they couldn't succeed.
+            val options = FormatPlanner.plan(raw, duration?.toDouble(), canMerge)
 
             if (options.isEmpty()) {
                 // Distinguish "nothing here" from "everything here needs ffmpeg
@@ -251,7 +296,8 @@ object YtDlpSource {
                 // that only offer separate video and audio renditions —
                 // Dailymotion and Threads among them — and reported it as if the
                 // link had no media at all.
-                val blockedByFfmpeg = planned.isNotEmpty() && !canMerge
+                val blockedByFfmpeg =
+                    !canMerge && FormatPlanner.couldPlanWithMerging(raw, duration?.toDouble())
                 throw SourceException(
                     if (blockedByFfmpeg) {
                         Errors.Classified(
@@ -336,12 +382,21 @@ object YtDlpSource {
         val dir = outputDirectory()
         val base = uniqueBase(dir, Filenames.sanitizeBase(title))
 
-        val request = YoutubeDLRequest(url).apply {
-            addOption("-f", option.selector)
-            option.mergeContainer?.let { addOption("--merge-output-format", it) }
+        // A direct URL from a custom resolver is handed to yt-dlp in place of the
+        // page, so downloads keep the same progress, notifications and output
+        // handling as every other site.
+        val target = option.directUrl ?: url
+        val request = YoutubeDLRequest(target).apply {
+            applyCommonOptions(context)
+            if (option.directUrl != null) {
+                HeaderBlob.decode(option.headerBlob).forEach { (key, value) ->
+                    addOption("--add-header", "$key:$value")
+                }
+            } else {
+                addOption("-f", option.selector)
+                option.mergeContainer?.let { addOption("--merge-output-format", it) }
+            }
             addOption("-o", File(dir, "$base.%(ext)s").absolutePath)
-            addOption("--no-playlist")
-            addOption("--no-warnings")
             // Keep the download timestamp rather than the upload date, so new
             // files sort to the top of the Downloads list.
             addOption("--no-mtime")

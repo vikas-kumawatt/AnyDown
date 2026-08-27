@@ -31,6 +31,23 @@ class FormatPlannerTest {
     }
 
     @Test
+    fun `best available is offered first and lets yt-dlp choose`() {
+        val option = FormatPlanner.plan(youtubeFormats(), 212.0).first()
+        assertEquals(Kind.BEST, option.kind)
+        assertEquals("bv*+ba/b", option.selector)
+        assertEquals("mp4", option.mergeContainer)
+    }
+
+    /** Without ffmpeg the merge branch can't run, so ask for a single stream. */
+    @Test
+    fun `best available degrades when ffmpeg is missing`() {
+        val options = FormatPlanner.plan(youtubeFormats(), 212.0, canMerge = false)
+        assertEquals("b", options.first().selector)
+        assertNull(options.first().mergeContainer)
+        assertTrue(options.none { it.kind == Kind.MERGE })
+    }
+
+    @Test
     fun `no resolution cap on device, unlike the server build`() {
         val labels = FormatPlanner.plan(youtubeFormats(), 212.0).map { it.label }
         assertTrue("1440p should be offered locally", labels.any { it.startsWith("1440p") })
@@ -82,7 +99,7 @@ class FormatPlannerTest {
         val tiktok = listOf(
             RawFormat("download", "mp4", 1024, null, null, 2_500_000, null)
         )
-        val options = FormatPlanner.plan(tiktok, 15.0)
+        val options = FormatPlanner.plan(tiktok, 15.0).filter { it.kind != Kind.BEST }
         assertEquals(1, options.size)
         assertEquals(Kind.PROGRESSIVE, options[0].kind)
         assertEquals(2_500_000L, options[0].sizeBytes)
@@ -93,22 +110,30 @@ class FormatPlannerTest {
         val formats = listOf(
             RawFormat("hls-720", "mp4", 720, "avc1.4d401f", "mp4a.40.2", null, 1800.0)
         )
-        val option = FormatPlanner.plan(formats, 60.0).first()
+        val option = FormatPlanner.plan(formats, 60.0).first { it.kind != Kind.BEST }
         assertEquals((1800.0 * 1000 / 8 * 60).toLong(), option.sizeBytes)
     }
 
     @Test
     fun `size is null when neither filesize nor bitrate is known`() {
         val formats = listOf(RawFormat("x", "mp4", 720, "avc1", "mp4a", null, null))
-        assertNull(FormatPlanner.plan(formats, null).first().sizeBytes)
+        val option = FormatPlanner.plan(formats, null).first { it.kind != Kind.BEST }
+        assertNull(option.sizeBytes)
     }
 
+    /**
+     * A video-only stream has nothing to merge with, so no merge row appears —
+     * but Best available still does, because `bv*+ba/b` falls through to the
+     * best single stream when there's no audio to pair.
+     */
     @Test
-    fun `video with no audio to pair is skipped`() {
+    fun `video with no audio produces no merge option`() {
         val formats = listOf(
             RawFormat("137", "mp4", 1080, "avc1", "none", 60_000_000, 4200.0)
         )
-        assertTrue(FormatPlanner.plan(formats, 212.0).isEmpty())
+        val options = FormatPlanner.plan(formats, 212.0)
+        assertTrue(options.none { it.kind == Kind.MERGE })
+        assertEquals(listOf(Kind.BEST), options.map { it.kind })
     }
 
     /**
@@ -123,10 +148,51 @@ class FormatPlannerTest {
             RawFormat("hls-1080", "mp4", 1080, "none", "none", null, 2400.0),
             RawFormat("hls-720", "mp4", 720, "none", "none", null, 1200.0),
         )
-        val options = FormatPlanner.plan(pinterest, 30.0)
+        val options = FormatPlanner.plan(pinterest, 30.0).filter { it.kind != Kind.BEST }
         assertEquals(2, options.size)
         assertTrue(options.all { it.kind == Kind.PROGRESSIVE })
         assertEquals("hls-1080", options[0].selector)
+    }
+
+    /**
+     * The second Pinterest bug. Its renditions report no height at all, so
+     * keying buckets by height collapsed every one of them into a single entry
+     * and an arbitrary winner — in practice an audio-only rendition, which is
+     * why "Original quality (MP4)" downloaded audio. Unknown heights now key by
+     * format id so each stays distinct, and an .m4a with unknown codecs is
+     * classified as audio rather than headlined as video.
+     */
+    @Test
+    fun `formats with unknown height do not collapse into one`() {
+        val pinterest = listOf(
+            RawFormat("hls-audio", "m4a", null, "none", "none", null, 64.0),
+            RawFormat("hls-video-hi", "mp4", null, "none", "none", null, 2400.0),
+            RawFormat("hls-video-lo", "mp4", null, "none", "none", null, 800.0),
+        )
+        val options = FormatPlanner.plan(pinterest, 16.0)
+
+        // Best available, two video renditions, one audio — not a single entry.
+        assertEquals(Kind.BEST, options.first().kind)
+        val video = options.filter { it.kind == Kind.PROGRESSIVE }
+        assertEquals(2, video.size)
+        assertEquals("hls-video-hi", video[0].selector)
+        assertEquals("hls-video-lo", video[1].selector)
+
+        // The audio rendition is labelled as audio, never offered as the video.
+        val audio = options.single { it.kind == Kind.AUDIO }
+        assertEquals("hls-audio", audio.selector)
+        assertTrue(video.none { it.selector == "hls-audio" })
+    }
+
+    @Test
+    fun `audio extensions are trusted when codecs are unreported`() {
+        listOf("m4a", "mp3", "opus", "aac", "wav", "flac").forEach { ext ->
+            val options = FormatPlanner.plan(
+                listOf(RawFormat("a", ext, null, null, null, 1_000, null)), 10.0
+            )
+            assertEquals(ext, Kind.AUDIO, options.last().kind)
+            assertTrue(ext, options.none { it.kind == Kind.PROGRESSIVE })
+        }
     }
 
     @Test
@@ -154,7 +220,7 @@ class FormatPlannerTest {
             RawFormat("thumb", "jpg", 1200, "none", "none", 400_000, null),
         )
         val options = FormatPlanner.plan(mixed, 10.0)
-        assertEquals(listOf(Kind.PROGRESSIVE, Kind.IMAGE), options.map { it.kind })
+        assertEquals(listOf(Kind.BEST, Kind.PROGRESSIVE, Kind.IMAGE), options.map { it.kind })
     }
 
     @Test
@@ -165,7 +231,7 @@ class FormatPlannerTest {
     @Test
     fun `unknown resolution still gets offered`() {
         val formats = listOf(RawFormat("only", "mp4", null, "avc1", "mp4a", 500, null))
-        val option = FormatPlanner.plan(formats, null).first()
+        val option = FormatPlanner.plan(formats, null).first { it.kind != Kind.BEST }
         assertEquals("Original quality (MP4)", option.label)
     }
 

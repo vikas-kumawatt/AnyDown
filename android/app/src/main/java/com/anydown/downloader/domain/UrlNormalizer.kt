@@ -52,6 +52,27 @@ object UrlNormalizer {
         return host.endsWith("threads.net") || host.endsWith("threads.com")
     }
 
+    /**
+     * `vimeo.com/<id>` and `vimeo.com/<id>/<hash>` for unlisted videos.
+     *
+     * vimeo.com itself now refuses anonymous extraction ("The web client only
+     * works when logged-in"), but player.vimeo.com serves the embed
+     * configuration and is built to answer anonymous requests, so it still
+     * works without credentials. The unlisted-link hash moves to `?h=`, which is
+     * what the player endpoint expects.
+     */
+    private val VIMEO_PATH = Regex("^/(\\d{6,})(?:/([0-9a-zA-Z]+))?/?$")
+
+    private fun rewriteVimeo(host: String, path: String): Pair<String, String>? {
+        val bare = host.removePrefix("www.")
+        if (bare != "vimeo.com") return null
+        val match = VIMEO_PATH.find(path) ?: return null
+        val id = match.groupValues[1]
+        val hash = match.groupValues[2]
+        val query = if (hash.isNotEmpty()) "h=$hash" else ""
+        return "player.vimeo.com" to "/video/$id" + (if (query.isNotEmpty()) "?$query" else "")
+    }
+
     /** Rewrite known-renamed hosts and drop tracking parameters. */
     fun normalize(rawUrl: String): String {
         val url = rawUrl.trim()
@@ -60,6 +81,13 @@ object UrlNormalizer {
         val (scheme, authority, path, query, _) = destructure(match)
 
         val host = authority.substringAfterLast('@').substringBefore(':').lowercase()
+
+        // Vimeo replaces the host and the path together, and brings its own
+        // query, so it short-circuits the generic handling below.
+        rewriteVimeo(host, path)?.let { (newHost, newPathAndQuery) ->
+            return "$scheme://$newHost$newPathAndQuery"
+        }
+
         val rewrittenHost = HOST_REWRITES[host] ?: host
         val port = authority.substringAfterLast('@').substringAfter(':', "")
         val rebuiltAuthority = if (port.isEmpty()) rewrittenHost else "$rewrittenHost:$port"

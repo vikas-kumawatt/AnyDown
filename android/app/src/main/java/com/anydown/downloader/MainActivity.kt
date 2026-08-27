@@ -83,6 +83,8 @@ class MainActivity : ComponentActivity() {
                                 DownloadService.cancel(this@MainActivity, jobId)
                             },
                             onClearFinished = viewModel::clearFinishedJobs,
+                            onToggleAdvanced = viewModel::toggleAdvanced,
+                            onProxyChange = viewModel::onProxyChange,
                         )
                     }
                 }

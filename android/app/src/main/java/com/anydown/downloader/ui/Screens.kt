@@ -1,7 +1,9 @@
 package com.anydown.downloader.ui
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -129,6 +131,8 @@ fun HomeScreen(
     onDismissMessages: () -> Unit,
     onCancelJob: (String) -> Unit,
     onClearFinished: () -> Unit,
+    onToggleAdvanced: () -> Unit,
+    onProxyChange: (String) -> Unit,
 ) {
     val busy = state.stage is DownloaderViewModel.Stage.Resolving
 
@@ -156,6 +160,14 @@ fun HomeScreen(
                 enabled = state.url.isNotBlank(),
                 loading = busy,
                 loadingLabel = "Reading link",
+            )
+
+            Spacer(Modifier.height(14.dp))
+            AdvancedPanel(
+                open = state.advancedOpen,
+                proxy = state.proxy,
+                onToggle = onToggleAdvanced,
+                onProxyChange = onProxyChange,
             )
 
             if (!state.engineReady) {
@@ -337,6 +349,102 @@ private fun UrlField(
     }
 }
 
+/**
+ * Collapsed by default: a proxy is the answer to one specific failure, not
+ * something most links need.
+ *
+ * When a site returns `Connection reset by peer` before extraction even starts,
+ * the connection is being refused by the network rather than the site — TikTok
+ * is ISP-blocked in several countries, ok.ru in others. Nothing in the app can
+ * fix that; sending the request somewhere else can.
+ */
+@Composable
+private fun AdvancedPanel(
+    open: Boolean,
+    proxy: String,
+    onToggle: () -> Unit,
+    onProxyChange: (String) -> Unit,
+) {
+    Column {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .clickable(onClick = onToggle)
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                if (open) "HIDE ADVANCED" else "ADVANCED",
+                style = Type.label.copy(color = Palette.textSecondary),
+            )
+            Spacer(Modifier.weight(1f))
+            if (proxy.isNotBlank() && !open) {
+                Text("PROXY ON", style = Type.label.copy(color = Palette.success))
+            }
+        }
+
+        AnimatedVisibility(open) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(CardRadius))
+                    .background(Palette.surface)
+                    .padding(16.dp)
+            ) {
+                Text("Proxy", style = Type.bodyBright)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "For sites your network blocks outright. Accepts " +
+                        "socks5://host:port or http://host:port.",
+                    style = Type.small.copy(color = Palette.textTertiary),
+                )
+                Spacer(Modifier.height(12.dp))
+
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Palette.base)
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    BasicTextField(
+                        value = proxy,
+                        onValueChange = onProxyChange,
+                        singleLine = true,
+                        textStyle = Type.inputText.copy(fontSize = 14.sp),
+                        cursorBrush = SolidColor(Palette.text),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Uri,
+                            imeAction = ImeAction.Done,
+                        ),
+                        modifier = Modifier.weight(1f),
+                        decorationBox = { inner ->
+                            Box {
+                                if (proxy.isEmpty()) {
+                                    Text(
+                                        "socks5://127.0.0.1:1080",
+                                        style = Type.inputText.copy(
+                                            fontSize = 14.sp,
+                                            color = Palette.textTertiary,
+                                        ),
+                                    )
+                                }
+                                inner()
+                            }
+                        },
+                    )
+                    if (proxy.isNotEmpty()) {
+                        Spacer(Modifier.width(10.dp))
+                        CloseButton(onClick = { onProxyChange("") })
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun ResultBlock(
     media: YtDlpSource.Resolved,
@@ -387,6 +495,7 @@ private fun ResultBlock(
             QualityCard(
                 headline = option.label,
                 note = when (option.kind) {
+                    FormatPlanner.Kind.BEST -> "Recommended — yt-dlp picks"
                     FormatPlanner.Kind.MERGE -> "Video + audio, combined on device"
                     FormatPlanner.Kind.AUDIO -> "Audio only"
                     FormatPlanner.Kind.IMAGE -> "Still image"

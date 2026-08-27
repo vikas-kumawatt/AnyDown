@@ -49,6 +49,8 @@ class DownloadService : Service() {
         private const val EXTRA_LABEL = "label"
         private const val EXTRA_SELECTOR = "selector"
         private const val EXTRA_MERGE = "merge"
+        private const val EXTRA_DIRECT_URL = "directUrl"
+        private const val EXTRA_HEADERS = "headers"
 
         fun enqueue(
             context: Context,
@@ -73,6 +75,9 @@ class DownloadService : Service() {
                 putExtra(EXTRA_LABEL, option.label)
                 putExtra(EXTRA_SELECTOR, option.selector)
                 putExtra(EXTRA_MERGE, option.mergeContainer)
+                // Custom-resolver media carries its own URL and headers.
+                putExtra(EXTRA_DIRECT_URL, option.directUrl)
+                putExtra(EXTRA_HEADERS, option.headerBlob)
             }
             // startForegroundService requires us to call startForeground within
             // ~5 seconds, which onStartCommand does immediately.
@@ -100,6 +105,8 @@ class DownloadService : Service() {
         val label: String,
         val selector: String,
         val mergeContainer: String?,
+        val directUrl: String?,
+        val headerBlob: String?,
     )
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -149,6 +156,8 @@ class DownloadService : Service() {
                             label = intent.getStringExtra(EXTRA_LABEL) ?: "",
                             selector = selector,
                             mergeContainer = intent.getStringExtra(EXTRA_MERGE),
+                            directUrl = intent.getStringExtra(EXTRA_DIRECT_URL),
+                            headerBlob = intent.getStringExtra(EXTRA_HEADERS),
                         )
                     )
                 }
@@ -183,6 +192,8 @@ class DownloadService : Service() {
                 else FormatPlanner.Kind.PROGRESSIVE,
                 selector = task.selector,
                 mergeContainer = task.mergeContainer,
+                directUrl = task.directUrl,
+                headerBlob = task.headerBlob,
             )
 
             val file = YtDlpSource.download(
