@@ -1,0 +1,9 @@
+# Pinned so a surprise upstream release can't break a deploy.
+# yt-dlp is the exception: bump it often (PRD section 13) — extractors rot fast.
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.1
+httpx==0.28.1
+slowapi==0.1.9
+yt-dlp==2025.1.26

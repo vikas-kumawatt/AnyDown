@@ -1,0 +1,76 @@
+name: Android APK
+
+# Builds an installable debug APK on every push, so you never need Android
+# Studio locally. Download it from the run's Artifacts section, or from the
+# Releases page when you push a tag.
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'android/**'
+      - '.github/workflows/android.yml'
+    tags: ['v*']
+  pull_request:
+    paths:
+      - 'android/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # No Gradle wrapper is committed (a wrapper JAR is a binary blob), so
+      # Gradle is provided by the action instead. Locally, run `gradle wrapper`
+      # once if you want ./gradlew.
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      # The pure-Kotlin domain logic — format planning, the platform allow-list,
+      # filename sanitising, error classification — is covered here. This is the
+      # gate: if the rules regress, the APK doesn't get built.
+      - name: Unit tests
+        run: gradle :app:testDebugUnitTest --no-daemon
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-report
+          path: android/app/build/reports/tests/
+          if-no-files-found: ignore
+
+      - name: Assemble debug APK
+        run: gradle :app:assembleDebug --no-daemon
+
+      # Per-ABI APKs plus a universal one. arm64-v8a is the one you want for any
+      # phone made in roughly the last eight years.
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: anydown-debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Attach APKs to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: android/app/build/outputs/apk/debug/*.apk
+          generate_release_notes: true

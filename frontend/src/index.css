@@ -1,0 +1,32 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-ink: #070b18;
+  --color-panel: #101729;
+  --color-edge: #1f2a44;
+  --color-accent: #5b8cff;
+}
+
+html {
+  color-scheme: dark;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(60rem 40rem at 50% -10rem, #1b2748 0%, transparent 70%),
+    var(--color-ink);
+  color: #e8ecf7;
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  min-height: 100dvh;
+  /* Respect the notch on phones. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+    env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+/* iOS zooms the page when a focused input's font-size is under 16px. */
+input,
+button {
+  font-size: 16px;
+}

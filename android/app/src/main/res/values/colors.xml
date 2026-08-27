@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Mirrors the web app's palette in frontend/src/index.css. -->
+    <color name="ink">#FF070B18</color>
+    <color name="accent">#FF5B8CFF</color>
+</resources>

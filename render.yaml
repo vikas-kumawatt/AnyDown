@@ -1,0 +1,37 @@
+# Render blueprint.
+#
+# Docker runtime, not the native Python one: Render's Python images don't ship
+# ffmpeg and you can't apt-get into them, so merged 1080p downloads would fail
+# with no way to fix it from config. The Dockerfile installs ffmpeg properly.
+# (The README has a native-runtime alternative if you'd rather avoid Docker,
+# but it downloads a static ffmpeg build at build time.)
+
+services:
+  - type: web
+    name: video-downloader-api
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /api/health
+    autoDeploy: false
+    envVars:
+      # Set to your Netlify URL after the first frontend deploy, e.g.
+      # https://your-app.netlify.app  — never "*".
+      - key: APP_CORS_ORIGINS
+        sync: false
+      - key: APP_RATE_LIMITS
+        value: 10/minute,100/day
+      - key: APP_MAX_HEIGHT
+        value: "1080"
+      # Merged downloads estimated above this fall back to a single stream.
+      - key: APP_MAX_MERGE_BYTES
+        value: "209715200"
+      - key: APP_MAX_CONCURRENT_DOWNLOADS
+        value: "2"
+      - key: APP_LOG_LEVEL
+        value: INFO
+      # Optional shared secret; leave unset for no auth (PRD section 9).
+      - key: APP_APP_KEY
+        sync: false
