@@ -305,7 +305,7 @@ object YtDlpSource {
                             "This link only offers separate video and audio tracks, " +
                                 "which need ffmpeg to combine — and ffmpeg didn't load. " +
                                 "Reinstall the app to fix it.",
-                            "${planned.size} format(s) found, all requiring a merge.",
+                            "${raw.size} raw format(s) reported, all requiring a merge.",
                         )
                     } else {
                         Errors.Classified(
