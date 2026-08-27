@@ -1,34 +1,30 @@
 #!/usr/bin/env python3
-"""Generate the AnyDown launcher icons.
+"""Generate every icon in the app from one source image.
 
-Run only when the mark changes:
-
-    pip install Pillow
+    pip install Pillow numpy
     python android/scripts/generate-icons.py
 
-The geometry deliberately matches the `Mark` composable in
-app/src/main/java/com/anydown/downloader/ui/Design.kt, so the icon on the
-launcher and the mark inside the app are the same drawing.
+`android/artwork/icon-source.png` is the only artwork in the project. Nothing
+here redraws or restyles it — the script trims the transparent margin, then
+rescales that same image into each slot Android needs:
 
-Three sets are produced:
-  * ic_launcher_foreground — white mark on transparency for the adaptive icon
-    (API 26+). Art is confined to the centre 66/108 of the canvas, the only
-    region a launcher mask is guaranteed not to crop.
-  * ic_launcher            — legacy square icon, API 24-25.
-  * ic_launcher_round      — legacy round icon, same.
+  * mipmap-*/ic_launcher.png        legacy launcher icon
+  * mipmap-*/ic_launcher_round.png  identical file; round-icon launchers get the
+                                    same artwork rather than a cropped variant
+  * mipmap-*/ic_launcher_foreground.png  adaptive foreground, API 26+
+  * drawable-nodpi/anydown_logo.png the in-app logo
 
-The wordmark from the source artwork is intentionally left out. At 48dp it
-would be an illegible smudge, and Android already prints the app name directly
-beneath the icon, so it would only be repeating itself.
+Adaptive icons are the one place Android forces a second layer: the launcher
+masks the foreground to its own shape and paints a background behind it. That
+background is set to the artwork's own tile colour (written to icon_colors.xml),
+so on a circular launcher the mask cuts a dark circle out of a dark tile and the
+artwork is what you see.
 """
 
 from pathlib import Path
 
-from PIL import Image, ImageDraw
-
-BACKDROP = (18, 18, 20, 255)  # @color/icon_background
-MARK = (255, 255, 255, 255)
-SUPERSAMPLE = 4
+import numpy as np
+from PIL import Image
 
 LEGACY_SIZES = {
     "mipmap-mdpi": 48,
@@ -37,7 +33,6 @@ LEGACY_SIZES = {
     "mipmap-xxhdpi": 144,
     "mipmap-xxxhdpi": 192,
 }
-# Adaptive foregrounds are authored on a 108dp canvas.
 FOREGROUND_SIZES = {
     "mipmap-mdpi": 108,
     "mipmap-hdpi": 162,
@@ -46,102 +41,101 @@ FOREGROUND_SIZES = {
     "mipmap-xxxhdpi": 432,
 }
 
-RES_DIR = Path(__file__).resolve().parents[1] / "app" / "src" / "main" / "res"
+# Adaptive icons reserve the centre 66 of 108 units. Anything outside can be
+# cropped by the launcher mask.
+SAFE_ZONE = 66 / 108
+
+ROOT = Path(__file__).resolve().parents[1]
+SOURCE = ROOT / "artwork" / "icon-source.png"
+RES_DIR = ROOT / "app" / "src" / "main" / "res"
+LOGO_SIZE = 512
 
 
-def rounded(draw, x0, y0, x1, y1, colour):
-    """Rounded bar, radius = half the short side."""
-    radius = min(abs(x1 - x0), abs(y1 - y0)) / 2
-    draw.rounded_rectangle([x0, y0, x1, y1], radius=radius, fill=colour)
+def load_artwork() -> Image.Image:
+    """Trim the transparent (or white) margin and pad back to a square."""
+    if not SOURCE.exists():
+        raise SystemExit(f"missing source artwork: {SOURCE}")
 
+    image = Image.open(SOURCE).convert("RGBA")
+    pixels = np.asarray(image).astype(int)
+    alpha = pixels[..., 3]
 
-def draw_mark(draw, cx, cy, art, colour=MARK, motion_lines=True):
-    """Arrow descending into an open tray, with motion lines to its left.
-
-    `art` is the height of the mark; `cx`/`cy` its centre.
-    """
-    # The motion lines extend well to the left of the arrow, so the arrow has to
-    # sit right of centre for the *composition* to be centred. The whole mark
-    # spans from ax - 0.905*art to ax + 0.40*art, which is balanced when the
-    # arrow is offset by a quarter of the art height.
-    ax = cx + (art * 0.25 if motion_lines else 0)
-    top = cy - art / 2
-
-    stem_w = art * 0.17
-    stem_top = top + art * 0.10
-    head_top = top + art * 0.44
-    head_half = art * 0.325
-    tip_y = top + art * 0.67
-
-    rounded(draw, ax - stem_w / 2, stem_top, ax + stem_w / 2, head_top + art * 0.02, colour)
-    draw.polygon(
-        [(ax - head_half, head_top), (ax + head_half, head_top), (ax, tip_y)],
-        fill=colour,
-    )
-
-    # Tray: two arms and a base, assembled rather than stroked, because PIL has
-    # no round-capped path stroking.
-    tray_half = art * 0.40
-    tray_top = top + art * 0.58
-    tray_bottom = top + art * 0.92
-    stroke = art * 0.125
-    rounded(draw, ax - tray_half, tray_top, ax - tray_half + stroke, tray_bottom, colour)
-    rounded(draw, ax + tray_half - stroke, tray_top, ax + tray_half, tray_bottom, colour)
-    rounded(draw, ax - tray_half, tray_bottom - stroke, ax + tray_half, tray_bottom, colour)
-
-    if motion_lines:
-        line_h = art * 0.095
-        right = ax - head_half - art * 0.08
-        for y_frac, len_frac, alpha in (
-            (0.24, 0.50, 1.0),
-            (0.39, 0.35, 0.70),
-            (0.53, 0.14, 0.42),
-        ):
-            faded = (colour[0], colour[1], colour[2], int(255 * alpha))
-            length = art * len_frac
-            y = top + art * y_frac
-            rounded(draw, right - length, y, right, y + line_h, faded)
-
-
-def build(size: int, shape: str) -> Image.Image:
-    canvas = size * SUPERSAMPLE
-    image = Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(image)
-
-    if shape == "foreground":
-        # Transparent; the adaptive icon supplies the backdrop colour.
-        art = canvas * (66 / 108) * 0.88
-    elif shape == "round":
-        draw.ellipse([0, 0, canvas - 1, canvas - 1], fill=BACKDROP)
-        art = canvas * 0.50
+    if alpha.max() > 0 and alpha.min() == 0:
+        visible = alpha > 8
     else:
-        draw.rounded_rectangle(
-            [0, 0, canvas - 1, canvas - 1], radius=canvas * 0.235, fill=BACKDROP
-        )
-        art = canvas * 0.56
+        # Fully opaque source: fall back to trimming a near-white border.
+        visible = pixels[..., :3].sum(axis=2) < 700
 
-    draw_mark(draw, canvas / 2, canvas / 2, art)
-    return image.resize((size, size), Image.LANCZOS)
+    ys, xs = np.where(visible)
+    if len(xs) == 0:
+        raise SystemExit("source artwork appears to be empty")
+
+    tile = image.crop((int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1))
+
+    side = max(tile.size)
+    square = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    square.paste(tile, ((side - tile.width) // 2, (side - tile.height) // 2), tile)
+    return square
+
+
+def tile_colour(tile: Image.Image) -> tuple:
+    """Median colour of the artwork's opaque dark area."""
+    pixels = np.asarray(tile).astype(int)
+    opaque = pixels[pixels[..., 3] > 200]
+    if len(opaque) == 0:
+        return (18, 18, 20)
+    dark = opaque[opaque[..., :3].sum(axis=1) < 400]
+    source = dark if len(dark) else opaque
+    return tuple(int(v) for v in np.median(source[:, :3], axis=0))
 
 
 def main() -> None:
+    artwork = load_artwork()
+    backdrop = tile_colour(artwork)
+    print(f"artwork {artwork.size}, tile colour #{'%02X%02X%02X' % backdrop}")
+
     written = 0
-    for folder, size in FOREGROUND_SIZES.items():
-        target = RES_DIR / folder
-        target.mkdir(parents=True, exist_ok=True)
-        build(size, "foreground").save(
-            target / "ic_launcher_foreground.png", "PNG", optimize=True
-        )
-        written += 1
 
     for folder, size in LEGACY_SIZES.items():
         target = RES_DIR / folder
         target.mkdir(parents=True, exist_ok=True)
-        build(size, "square").save(target / "ic_launcher.png", "PNG", optimize=True)
-        build(size, "round").save(target / "ic_launcher_round.png", "PNG", optimize=True)
+        scaled = artwork.resize((size, size), Image.LANCZOS)
+        # Same file for both: a round-icon launcher shows the artwork, not a
+        # differently-cropped version of it.
+        scaled.save(target / "ic_launcher.png", "PNG", optimize=True)
+        scaled.save(target / "ic_launcher_round.png", "PNG", optimize=True)
         written += 2
 
-    print(f"wrote {written} icon files under {RES_DIR}")
+    for folder, size in FOREGROUND_SIZES.items():
+        target = RES_DIR / folder
+        target.mkdir(parents=True, exist_ok=True)
+        art = int(size * SAFE_ZONE)
+        layer = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        scaled = artwork.resize((art, art), Image.LANCZOS)
+        offset = (size - art) // 2
+        layer.paste(scaled, (offset, offset), scaled)
+        layer.save(target / "ic_launcher_foreground.png", "PNG", optimize=True)
+        written += 1
+
+    logo_dir = RES_DIR / "drawable-nodpi"
+    logo_dir.mkdir(parents=True, exist_ok=True)
+    artwork.resize((LOGO_SIZE, LOGO_SIZE), Image.LANCZOS).save(
+        logo_dir / "anydown_logo.png", "PNG", optimize=True
+    )
+    written += 1
+
+    colours = RES_DIR / "values" / "icon_colors.xml"
+    colours.write_text(
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        "<!-- Generated by android/scripts/generate-icons.py from the source\n"
+        "     artwork. Do not edit by hand. -->\n"
+        "<resources>\n"
+        f'    <color name="icon_background">#FF{"%02X%02X%02X" % backdrop}</color>\n'
+        "</resources>\n",
+        encoding="utf-8",
+    )
+
+    print(f"wrote {written} image files and {colours.name}")
 
 
 if __name__ == "__main__":

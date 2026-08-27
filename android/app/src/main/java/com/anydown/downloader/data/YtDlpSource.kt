@@ -7,6 +7,7 @@ import android.util.Log
 import com.anydown.downloader.domain.Errors
 import com.anydown.downloader.domain.Filenames
 import com.anydown.downloader.domain.FormatPlanner
+import com.anydown.downloader.domain.UrlNormalizer
 import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLException
@@ -18,6 +19,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 
 /**
  * The only file that talks to youtubedl-android.
@@ -43,6 +46,10 @@ object YtDlpSource {
 
     private const val TAG = "YtDlpSource"
     private const val OUTPUT_SUBDIR = "AnyDown"
+    private const val PREFS = "anydown"
+    private const val KEY_LAST_UPDATE = "ytdlp_last_update"
+    private const val UPDATE_INTERVAL_MS = 24L * 60 * 60 * 1000
+    private const val REDIRECT_TIMEOUT_MS = 12_000
 
     private val initMutex = Mutex()
     @Volatile private var initialised = false
@@ -105,33 +112,122 @@ object YtDlpSource {
     /**
      * Updates the bundled yt-dlp in place.
      *
-     * This is the app's answer to extractor rot (PRD section 13): platforms
-     * change and extractors break, and this fixes it without shipping a new APK.
+     * This is the app's answer to extractor rot: platforms change, extractors
+     * break, and this fixes it without shipping a new APK. The version bundled
+     * in the library is however old the library release is — which is why
+     * TikTok and Dailymotion fail out of the box with "Unable to extract
+     * webpage video data" and "No video formats found".
+     *
+     * Nightly, not stable: extractor repairs land there first, and for a
+     * personal tool a fresher extractor beats a slower-moving one.
      */
     suspend fun updateEngine(context: Context): String = withContext(Dispatchers.IO) {
         ensureInitialised(context)
         try {
             val status = YoutubeDL.getInstance()
-                .updateYoutubeDL(context, YoutubeDL.UpdateChannel.STABLE)
+                .updateYoutubeDL(context, YoutubeDL.UpdateChannel.NIGHTLY)
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit().putLong(KEY_LAST_UPDATE, System.currentTimeMillis()).apply()
             when (status?.name) {
-                "ALREADY_UP_TO_DATE" -> "Already up to date."
-                else -> "yt-dlp updated."
+                "ALREADY_UP_TO_DATE" -> "yt-dlp is already up to date."
+                else -> "yt-dlp updated. Retry your link."
             }
         } catch (e: Exception) {
             throw SourceException(
-                Errors.Classified(Errors.Code.NETWORK, "Update failed: ${e.message}"),
+                Errors.Classified(
+                    Errors.Code.NETWORK,
+                    "Update failed. Check your connection and try again.",
+                    e.message,
+                ),
                 e,
             )
         }
+    }
+
+    /**
+     * Refreshes yt-dlp in the background if it hasn't been done in a while.
+     *
+     * The bundled extractors are stale the day the APK is built, so waiting for
+     * the user to discover the Update button means the first few links they try
+     * fail for no visible reason. Silent by design: it either quietly helps or
+     * quietly does nothing.
+     */
+    suspend fun updateIfStale(context: Context) = withContext(Dispatchers.IO) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val last = prefs.getLong(KEY_LAST_UPDATE, 0L)
+        val age = System.currentTimeMillis() - last
+        if (last != 0L && age < UPDATE_INTERVAL_MS) return@withContext
+        runCatching { updateEngine(context) }
+            .onFailure { Log.i(TAG, "background yt-dlp update skipped: ${it.message}") }
+        Unit
     }
 
     // ----------------------------------------------------------------------
     // Resolve
     // ----------------------------------------------------------------------
 
-    suspend fun resolve(context: Context, url: String): Resolved =
+    /**
+     * Follows a share/short link to its destination.
+     *
+     * Threads share links land on `threads.com`, which yt-dlp's extractor
+     * doesn't match — so the redirect has to be resolved here, before
+     * [UrlNormalizer] can rewrite the host. Best-effort: on any failure the
+     * original URL is returned and yt-dlp gets its usual shot at it.
+     */
+    private fun followRedirects(url: String): String {
+        var current = url
+        repeat(5) {
+            val connection = try {
+                (URL(current).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "HEAD"
+                    instanceFollowRedirects = false
+                    connectTimeout = REDIRECT_TIMEOUT_MS
+                    readTimeout = REDIRECT_TIMEOUT_MS
+                    // Some share endpoints only redirect for a real browser.
+                    setRequestProperty(
+                        "User-Agent",
+                        "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 " +
+                            "(KHTML, like Gecko) Chrome/120 Mobile Safari/537.36",
+                    )
+                }
+            } catch (e: Exception) {
+                Log.i(TAG, "redirect resolve failed for $current: ${e.message}")
+                return current
+            }
+
+            val location = try {
+                val code = connection.responseCode
+                if (code !in 300..399) return current
+                connection.getHeaderField("Location")
+            } catch (e: Exception) {
+                Log.i(TAG, "redirect read failed: ${e.message}")
+                return current
+            } finally {
+                connection.disconnect()
+            }
+
+            if (location.isNullOrBlank()) return current
+            current = try {
+                URL(URL(current), location).toString()
+            } catch (e: Exception) {
+                return current
+            }
+        }
+        return current
+    }
+
+    /** Resolve short links, then rewrite renamed hosts and strip tracking junk. */
+    private fun prepareUrl(raw: String): String {
+        val resolved =
+            if (UrlNormalizer.isShortLink(raw)) followRedirects(raw.trim()) else raw.trim()
+        return UrlNormalizer.normalize(resolved)
+    }
+
+    suspend fun resolve(context: Context, rawUrl: String): Resolved =
         withContext(Dispatchers.IO) {
             ensureInitialised(context)
+            val url = prepareUrl(rawUrl)
+            if (url != rawUrl.trim()) Log.i(TAG, "normalised to $url")
 
             val request = YoutubeDLRequest(url).apply {
                 addOption("--no-playlist")
@@ -226,7 +322,7 @@ object YtDlpSource {
      */
     suspend fun download(
         context: Context,
-        url: String,
+        rawUrl: String,
         title: String?,
         option: FormatPlanner.Option,
         processId: String,
@@ -234,6 +330,9 @@ object YtDlpSource {
     ): File = withContext(Dispatchers.IO) {
         ensureInitialised(context)
 
+        // Same normalisation as resolve, or the format ids won't match the page
+        // that produced them.
+        val url = prepareUrl(rawUrl)
         val dir = outputDirectory()
         val base = uniqueBase(dir, Filenames.sanitizeBase(title))
 

@@ -1,9 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Mirrors ui/Design.kt. Only the window chrome needs these; the app's
-         own surfaces are coloured in Compose. -->
-    <color name="paper">#FFFFFFFF</color>
-    <color name="ink">#FF0B0B0C</color>
-    <!-- Launcher icon background: near-black, matching the mark. -->
-    <color name="icon_background">#FF121214</color>
+    <!-- Mirrors Palette in ui/Design.kt. Only the launch window needs these;
+         every in-app surface is coloured from Compose.
+         icon_background is generated separately into icon_colors.xml. -->
+    <color name="base">#FF0D0D0F</color>
 </resources>

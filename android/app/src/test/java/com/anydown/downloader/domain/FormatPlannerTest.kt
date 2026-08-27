@@ -111,10 +111,50 @@ class FormatPlannerTest {
         assertTrue(FormatPlanner.plan(formats, 212.0).isEmpty())
     }
 
+    /**
+     * The Pinterest regression: a pin reported six formats with no codec
+     * information and every one of them was discarded, surfacing as "found no
+     * downloadable media". Unknown codecs now mean "let yt-dlp decide", not
+     * "throw it away".
+     */
     @Test
-    fun `formats with both codecs absent are rejected`() {
-        val formats = listOf(RawFormat("junk", "mp4", 100, "none", "none", 1000, null))
-        assertTrue(FormatPlanner.plan(formats, 10.0).isEmpty())
+    fun `formats with no codec information are still offered`() {
+        val pinterest = listOf(
+            RawFormat("hls-1080", "mp4", 1080, "none", "none", null, 2400.0),
+            RawFormat("hls-720", "mp4", 720, "none", "none", null, 1200.0),
+        )
+        val options = FormatPlanner.plan(pinterest, 30.0)
+        assertEquals(2, options.size)
+        assertTrue(options.all { it.kind == Kind.PROGRESSIVE })
+        assertEquals("hls-1080", options[0].selector)
+    }
+
+    @Test
+    fun `image pins are offered as images, largest first`() {
+        val pin = listOf(
+            RawFormat("orig", "jpg", 1200, "none", "none", 480_000, null),
+            RawFormat("med", "jpg", 600, "none", "none", 120_000, null),
+            RawFormat("small", "jpg", 236, "none", "none", 20_000, null),
+            RawFormat("tiny", "jpg", 75, "none", "none", 4_000, null),
+        )
+        val options = FormatPlanner.plan(pin, null)
+        // Capped at three so a pin's thumbnail ladder isn't dumped on screen.
+        assertEquals(3, options.size)
+        assertTrue(options.all { it.kind == Kind.IMAGE })
+        assertEquals("Image 1200px (JPG)", options[0].label)
+        assertEquals("orig", options[0].selector)
+        assertEquals(480_000L, options[0].sizeBytes)
+        assertNull(options[0].mergeContainer)
+    }
+
+    @Test
+    fun `images and video can coexist`() {
+        val mixed = listOf(
+            RawFormat("v", "mp4", 720, "avc1", "mp4a", 5_000_000, null),
+            RawFormat("thumb", "jpg", 1200, "none", "none", 400_000, null),
+        )
+        val options = FormatPlanner.plan(mixed, 10.0)
+        assertEquals(listOf(Kind.PROGRESSIVE, Kind.IMAGE), options.map { it.kind })
     }
 
     @Test

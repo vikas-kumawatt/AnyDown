@@ -1,15 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Compose draws the UI; this exists so the launch window is paper white
-         instead of flashing dark, and so the system bar icons are dark enough
-         to read against it. -->
-    <style name="Theme.AnyDown" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:windowBackground">@color/paper</item>
+    <!-- Compose draws the UI. This exists so the launch window is already dark
+         rather than flashing white, and so system bar icons are light. -->
+    <style name="Theme.AnyDown" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/base</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
-        <item name="android:windowLightStatusBar">true</item>
-        <!-- Ignored below API 27, which is fine — those devices just keep
-             light-on-dark nav icons. -->
-        <item name="android:windowLightNavigationBar" tools:targetApi="27">true</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="27">false</item>
     </style>
 </resources>

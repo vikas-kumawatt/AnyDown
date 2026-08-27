@@ -40,13 +40,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Explicitly light, not `auto`. The default picks bar icon colour from
-        // the system dark-mode setting — which on a phone in dark mode would
-        // give white icons on this paper-white page, i.e. invisible. The design
-        // is light-only, so the bars are pinned light regardless.
+        // Explicitly dark, not `auto`. The default picks bar icon colour from
+        // the system dark-mode setting, so a phone in light mode would get dark
+        // icons on this dark page — invisible. The app is dark-only, so the
+        // bars are pinned dark regardless of the system setting.
         enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.BLACK),
-            navigationBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.BLACK),
+            statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
         )
 
         // Android 13+ needs this before the foreground service notification can

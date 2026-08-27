@@ -1,28 +1,20 @@
 package com.anydown.downloader.domain
 
 /**
- * Decides which qualities to offer, ported from the web version's
- * `backend/app/extractor.py`.
+ * Decides which qualities to offer.
  *
- * The important difference from the server build: this does not stream or mux
- * anything itself. It produces a **yt-dlp format selector** (`"137+140"`) and
- * lets yt-dlp do the download and the merge on-device. All the streaming,
- * fragmented-MP4 and pipe plumbing the server needed is gone — it only existed
- * because bytes had to cross a network.
+ * Produces a **yt-dlp format selector** (`"137+140"`) and lets yt-dlp do the
+ * download and any merge on-device. All the streaming and pipe plumbing the
+ * server version needed is gone — that only existed because bytes had to cross
+ * a network.
  *
- * Deliberately free of Android and youtubedl-android imports so it can be unit
- * tested on the JVM in CI. [RawFormat] is this module's own model; mapping the
- * library's `VideoFormat` onto it happens in one place, in `YtDlpSource`.
+ * Free of Android and library imports so CI can unit test it on the JVM.
+ * [RawFormat] is this module's own model; mapping the library's `VideoFormat`
+ * onto it happens in one place, in `YtDlpSource`.
  */
 object FormatPlanner {
 
-    /**
-     * One entry from yt-dlp's `formats` array, reduced to what we use.
-     *
-     * No `protocol` field, unlike the server version's equivalent: there it
-     * decided between proxying bytes directly and routing through ffmpeg. On
-     * device, yt-dlp handles HLS/DASH itself, so the distinction never surfaces.
-     */
+    /** One entry from yt-dlp's `formats` array, reduced to what we use. */
     data class RawFormat(
         val formatId: String,
         val ext: String?,
@@ -33,7 +25,7 @@ object FormatPlanner {
         val bitrateKbps: Double?,
     )
 
-    enum class Kind { PROGRESSIVE, MERGE, AUDIO }
+    enum class Kind { PROGRESSIVE, MERGE, AUDIO, IMAGE }
 
     /** One row in the UI's quality list. */
     data class Option(
@@ -48,57 +40,68 @@ object FormatPlanner {
         val mergeContainer: String?,
     )
 
-    // Containers that survive `-c copy` into an MP4. Anything else (VP9/Opus/AV1
-    // in WebM) goes to Matroska instead, which accepts them.
     private val MP4_COMPATIBLE = setOf("mp4", "m4a", "m4v", "mov", "3gp", "aac")
 
     private val AUDIO_EXT_PREFERENCE = mapOf("m4a" to 3, "mp4" to 3, "webm" to 2, "opus" to 2, "mp3" to 1)
     private val VIDEO_EXT_PREFERENCE = mapOf("mp4" to 3, "mov" to 2, "webm" to 1)
 
-    // Storyboard/thumbnail pseudo-formats yt-dlp reports that aren't media.
-    private val JUNK_EXTS = setOf("mhtml", "none")
+    /** Pins, and any other extractor that serves stills. */
+    private val IMAGE_EXTS = setOf("jpg", "jpeg", "png", "webp", "gif", "heic", "avif")
+
+    /**
+     * Storyboard sheets — thumbnail contact strips, never the media itself.
+     * This is the *only* thing dropped outright.
+     */
+    private val JUNK_EXTS = setOf("mhtml")
+
+    /** More image sizes than this is noise rather than choice. */
+    private const val MAX_IMAGE_OPTIONS = 3
 
     /**
      * Build the offered options, best first.
      *
      * One entry per distinct resolution, preferring a single progressive stream
-     * over a merge (no ffmpeg needed, and no chance of a container mismatch),
-     * plus one audio-only entry.
+     * over a merge, plus one audio-only entry and any still images.
      *
-     * Unlike the server build there is no resolution cap: it's your own device
-     * and your own storage, so 1440p/2160p are offered when the platform has
-     * them. Those are usually VP9/AV1, so the label will say MKV.
+     * No resolution cap: it's your device and your storage, so every resolution
+     * the platform reports is offered. Above 1080p that usually means VP9 or
+     * AV1, which MP4 can't hold reliably, so the label will say MKV.
      */
     fun plan(formats: List<RawFormat>, durationSeconds: Double?): List<Option> {
         val usable = formats.filter { format ->
-            format.formatId.isNotBlank() &&
-                (format.ext?.lowercase() ?: "") !in JUNK_EXTS &&
-                !isNotMedia(format)
+            format.formatId.isNotBlank() && (format.ext?.lowercase() ?: "") !in JUNK_EXTS
         }
 
         val progressive = LinkedHashMap<Int, RawFormat>()
         val videoOnly = LinkedHashMap<Int, RawFormat>()
         val audioOnly = mutableListOf<RawFormat>()
+        val images = LinkedHashMap<Int, RawFormat>()
 
         for (format in usable) {
+            val ext = format.ext?.lowercase() ?: ""
             val vcodec = codec(format.vcodec)
             val acodec = codec(format.acodec)
-            val reportsCodecs = format.vcodec != null || format.acodec != null
+            val height = format.height?.takeIf { it > 0 } ?: 0
 
             val bucket = when {
+                ext in IMAGE_EXTS -> images
                 vcodec != null && acodec != null -> progressive
                 vcodec != null -> videoOnly
-                acodec != null -> {
-                    audioOnly += format
-                    continue
-                }
-                // Extractor reported no codec info at all (common on TikTok and
-                // Pinterest). Those serve self-contained files.
-                !reportsCodecs -> progressive
-                else -> continue
+                // Audio-only doesn't dedupe by height, so it's collected apart.
+                acodec != null -> null
+                // Neither codec reported, or both reported as "none", on a
+                // non-image format. Older builds threw these away, which is
+                // what silently broke Pinterest — it reports pin media with no
+                // codec information at all. yt-dlp can still fetch them, so
+                // assume a self-contained stream and let it decide.
+                else -> progressive
             }
 
-            val height = format.height?.takeIf { it > 0 } ?: 0
+            if (bucket == null) {
+                audioOnly += format
+                continue
+            }
+
             val incumbent = bucket[height]
             if (incumbent == null || videoRank(format) > videoRank(incumbent)) {
                 bucket[height] = format
@@ -111,8 +114,7 @@ object FormatPlanner {
 
         val options = mutableListOf<Option>()
 
-        val heights = (progressive.keys + videoOnly.keys).sortedDescending()
-        for (height in heights) {
+        for (height in (progressive.keys + videoOnly.keys).sortedDescending()) {
             val prog = progressive[height]
             if (prog != null) {
                 val ext = prog.ext?.lowercase() ?: "mp4"
@@ -129,7 +131,7 @@ object FormatPlanner {
             }
 
             val video = videoOnly[height] ?: continue
-            if (bestAudio == null) continue // video with no audio track to pair
+            if (bestAudio == null) continue
 
             val container = containerFor(video.ext, bestAudio.ext)
             val videoSize = estimateSize(video, durationSeconds)
@@ -158,6 +160,21 @@ object FormatPlanner {
             )
         }
 
+        images.keys.sortedDescending().take(MAX_IMAGE_OPTIONS).forEach { height ->
+            val image = images.getValue(height)
+            val ext = image.ext?.lowercase() ?: "jpg"
+            options += Option(
+                id = "i-${image.formatId}",
+                label = if (height > 0) "Image ${height}px (${ext.uppercase()})"
+                else "Image (${ext.uppercase()})",
+                ext = ext,
+                sizeBytes = image.fileSize?.takeIf { it > 0 },
+                kind = Kind.IMAGE,
+                selector = image.formatId,
+                mergeContainer = null,
+            )
+        }
+
         return options
     }
 
@@ -165,14 +182,8 @@ object FormatPlanner {
     private fun codec(value: String?): String? =
         value?.takeIf { it.isNotBlank() && it != "none" }
 
-    /** Both codecs explicitly reported as absent: not a playable stream. */
-    private fun isNotMedia(format: RawFormat): Boolean =
-        format.vcodec != null && format.acodec != null &&
-            codec(format.vcodec) == null && codec(format.acodec) == null
-
     private fun videoRank(format: RawFormat): Int {
         val extScore = VIDEO_EXT_PREFERENCE[format.ext?.lowercase()] ?: 0
-        // Bitrate breaks ties within a container preference.
         return extScore * 1_000_000 + ((format.bitrateKbps ?: 0.0).toInt())
     }
 

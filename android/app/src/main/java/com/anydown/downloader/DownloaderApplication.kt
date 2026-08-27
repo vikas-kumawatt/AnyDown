@@ -20,6 +20,13 @@ class DownloaderApplication : Application() {
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             runCatching { YtDlpSource.ensureInitialised(this@DownloaderApplication) }
                 .onFailure { Log.w("DownloaderApplication", "warm-up failed", it) }
+
+            // The yt-dlp bundled in the library is already months stale by the
+            // time an APK is built, which is why TikTok and Dailymotion fail on
+            // a fresh install. Refresh it quietly, at most once a day, instead
+            // of waiting for the user to find the Update button.
+            runCatching { YtDlpSource.updateIfStale(this@DownloaderApplication) }
+                .onFailure { Log.i("DownloaderApplication", "update check skipped", it) }
         }
     }
 }

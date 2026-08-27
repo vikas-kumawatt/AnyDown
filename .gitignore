@@ -17,3 +17,5 @@ android/.idea/
 *.iml
 *.apk
 *.keystore
+# Fetched by the downloadFonts Gradle task, not committed.
+android/app/src/main/res/font/plus_jakarta_sans.ttf

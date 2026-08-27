@@ -1,8 +1,67 @@
+import java.net.URL
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 }
+
+/**
+ * Fetches Plus Jakarta Sans into res/font at build time.
+ *
+ * The font isn't committed — it's an OFL-licensed upstream artefact, and
+ * checking a binary into the repo to be silently forked is worse than fetching
+ * a known version. Gradle caches the output directory, so this only touches the
+ * network once, and Android Studio picks it up because preBuild depends on it.
+ *
+ * One variable file covers every weight: Compose selects along the `wght` axis
+ * via FontVariation (API 26+). On API 24-25 the axis is ignored and the font
+ * renders at its default weight — still Plus Jakarta Sans, just uniform.
+ */
+val fontFile = layout.projectDirectory.file("src/main/res/font/plus_jakarta_sans.ttf")
+
+val downloadFonts by tasks.registering {
+    description = "Downloads the Plus Jakarta Sans variable font into res/font."
+    outputs.file(fontFile)
+
+    doLast {
+        val target = fontFile.asFile
+        if (target.exists() && target.length() > 50_000) return@doLast
+        target.parentFile.mkdirs()
+
+        val sources = listOf(
+            "https://raw.githubusercontent.com/google/fonts/main/ofl/plusjakartasans/PlusJakartaSans%5Bwght%5D.ttf",
+            "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/plusjakartasans/PlusJakartaSans%5Bwght%5D.ttf",
+        )
+
+        val failures = mutableListOf<String>()
+        for (source in sources) {
+            try {
+                URL(source).openStream().use { input ->
+                    target.outputStream().use { output -> input.copyTo(output) }
+                }
+                if (target.length() > 50_000) {
+                    logger.lifecycle("Fetched Plus Jakarta Sans (${target.length()} bytes)")
+                    return@doLast
+                }
+                failures += "$source returned ${target.length()} bytes"
+            } catch (e: Exception) {
+                failures += "$source: ${e.message}"
+            }
+        }
+
+        target.delete()
+        throw GradleException(
+            "Couldn't download Plus Jakarta Sans.\n" +
+                failures.joinToString("\n") { "  - $it" } +
+                "\n\nFix: download PlusJakartaSans[wght].ttf from " +
+                "https://fonts.google.com/specimen/Plus+Jakarta+Sans and save it as\n" +
+                "  ${target.relativeTo(rootDir)}"
+        )
+    }
+}
+
+tasks.named("preBuild") { dependsOn(downloadFonts) }
 
 android {
     namespace = "com.anydown.downloader"
@@ -16,8 +75,8 @@ android {
         // git tag minus its "v". versionCode must only ever increase — Android
         // refuses to install an APK whose versionCode is lower than the one
         // already on the device.
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 3
+        versionName = "1.2.0"
 
         // youtubedl-android ships a Python runtime and yt-dlp/ffmpeg binaries per
         // ABI. Every ABI you keep is roughly another 25-35 MB of APK. arm64-v8a
