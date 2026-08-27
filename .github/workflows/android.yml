@@ -5,10 +5,11 @@ name: Android APK
 # Releases page when you push a tag.
 on:
   push:
+    # No `paths` filter here. Combining it with `tags` in a single push trigger
+    # is unreliable: a tag push often carries no file diff for the filter to
+    # match, so the release build silently never runs. A 2.5 minute build on
+    # every push to main is a better trade than a release that doesn't happen.
     branches: [main, master]
-    paths:
-      - 'android/**'
-      - '.github/workflows/android.yml'
     tags: ['v*']
   pull_request:
     paths:

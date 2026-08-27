@@ -12,8 +12,12 @@ android {
         applicationId = "com.anydown.downloader"
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        // Bump both when tagging a release, and keep versionName equal to the
+        // git tag minus its "v". versionCode must only ever increase — Android
+        // refuses to install an APK whose versionCode is lower than the one
+        // already on the device.
+        versionCode = 2
+        versionName = "1.1.0"
 
         // youtubedl-android ships a Python runtime and yt-dlp/ffmpeg binaries per
         // ABI. Every ABI you keep is roughly another 25-35 MB of APK. arm64-v8a
