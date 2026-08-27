@@ -5,6 +5,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -51,7 +52,12 @@ object Palette {
  * `FontVariation` needs API 26; below that Android ignores the axis and renders
  * the default weight, so the hierarchy flattens slightly on very old devices but
  * nothing breaks.
+ *
+ * The opt-in is required because `FontVariation` is still marked experimental in
+ * Compose. It's confined to this one function, so if the API is renamed later
+ * this is the only place that changes.
  */
+@OptIn(ExperimentalTextApi::class)
 private fun jakarta(weight: FontWeight) = Font(
     R.font.plus_jakarta_sans,
     weight = weight,

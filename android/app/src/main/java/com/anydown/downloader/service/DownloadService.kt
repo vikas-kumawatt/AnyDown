@@ -187,7 +187,7 @@ class DownloadService : Service() {
 
             val file = YtDlpSource.download(
                 context = applicationContext,
-                url = task.url,
+                rawUrl = task.url,
                 title = task.title,
                 option = option,
                 processId = task.jobId,
