@@ -3,11 +3,24 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#0b1020" />
-    <!-- Personal tool: keep it out of search results (PRD section 13). -->
+    <meta name="theme-color" content="#0d0d0f" />
+    <!-- Personal tool: keep it out of search results. -->
     <meta name="robots" content="noindex, nofollow, noarchive" />
     <meta name="referrer" content="no-referrer" />
-    <title>Downloader</title>
+
+    <link rel="icon" href="/icon.png" type="image/png" />
+    <link rel="apple-touch-icon" href="/icon.png" />
+
+    <!-- Same typeface as the Android build, which fetches the variable font at
+         build time. Here the browser can just be told about it. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+
+    <title>AnyDown</title>
   </head>
   <body>
     <div id="root"></div>

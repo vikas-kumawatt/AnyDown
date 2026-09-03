@@ -1,10 +1,39 @@
 @import 'tailwindcss';
 
+/*
+ * Dark, near-monochrome, on Plus Jakarta Sans.
+ *
+ * Mirrors android/.../ui/Design.kt token for token, so the app and the web
+ * version read as one product. Weight and spacing do the work colour usually
+ * does; the only saturated colours are status markers.
+ */
 @theme {
-  --color-ink: #070b18;
-  --color-panel: #101729;
-  --color-edge: #1f2a44;
-  --color-accent: #5b8cff;
+  --color-base: #0d0d0f;
+  --color-surface: #16161a;
+  --color-raised: #1e1e23;
+  --color-pressed: #26262c;
+
+  --color-ink: #f4f4f6;
+  --color-ink-2: #9e9ea8;
+  --color-ink-3: #6b6b76;
+  --color-on-accent: #0d0d0f;
+
+  /* The one bright surface: primary buttons are near-white on dark. */
+  --color-accent: #f4f4f6;
+
+  --color-edge: #26262c;
+  --color-edge-strong: #3a3a43;
+
+  --color-danger: #ff6b6b;
+  --color-success: #4ade80;
+  --color-warning: #fbbf24;
+
+  --font-sans:
+    'Plus Jakarta Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI',
+    Roboto, sans-serif;
+
+  --radius-card: 16px;
+  --radius-control: 14px;
 }
 
 html {
@@ -14,11 +43,11 @@ html {
 
 body {
   margin: 0;
-  background:
-    radial-gradient(60rem 40rem at 50% -10rem, #1b2748 0%, transparent 70%),
-    var(--color-ink);
-  color: #e8ecf7;
-  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  background: var(--color-base);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-synthesis-weight: none;
+  -webkit-font-smoothing: antialiased;
   min-height: 100dvh;
   /* Respect the notch on phones. */
   padding: env(safe-area-inset-top) env(safe-area-inset-right)
@@ -28,5 +57,21 @@ body {
 /* iOS zooms the page when a focused input's font-size is under 16px. */
 input,
 button {
+  font-family: inherit;
   font-size: 16px;
+}
+
+/* Section labels and the wordmark: small, wide, uppercase. */
+.label {
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 600;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--color-ink-3);
+}
+
+/* Figures that headline a row. Tabular so digits don't shift as they change. */
+.figure {
+  font-variant-numeric: tabular-nums;
 }

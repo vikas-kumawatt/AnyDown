@@ -1,5 +1,7 @@
-// One-time rights acknowledgement (PRD section 5). The flag is the only thing
-// this app ever puts in localStorage — no download history is kept.
+import { PrimaryButton } from './Primitives.jsx'
+
+// One-time rights acknowledgement. The flag is the only thing this app ever
+// puts in localStorage — no download history is kept.
 
 const STORAGE_KEY = 'downloader.rights-ack.v1'
 
@@ -12,6 +14,12 @@ export function hasAcknowledged() {
   }
 }
 
+const RULES = [
+  ['Public content only', 'Nothing private or login-walled.'],
+  ['No DRM', 'Paid and protected content is out of scope.'],
+  ['Private viewing', 'Never redistribution.'],
+]
+
 export function Acknowledgement({ onAccept }) {
   const accept = () => {
     try {
@@ -23,24 +31,38 @@ export function Acknowledgement({ onAccept }) {
   }
 
   return (
-    <div className="mx-auto w-full max-w-md rounded-2xl border border-edge bg-panel/80 p-6 shadow-xl backdrop-blur">
-      <h1 className="text-xl font-semibold">Before you start</h1>
-      <p className="mt-3 text-sm leading-relaxed text-slate-300">
-        This tool is for personal use only. Downloading may breach a platform's
-        terms of service, and most content is protected by copyright.
+    <div className="mx-auto w-full max-w-md px-5 py-16">
+      <img src="/icon.png" alt="" width="56" height="56" className="rounded-[14px]" />
+
+      <h1 className="mt-9 text-[32px] font-extrabold leading-[39px] tracking-[-0.8px]">
+        Before you
+        <br />
+        begin
+      </h1>
+
+      <p className="mt-[18px] text-[15px] leading-[23px] text-ink-2">
+        This tool is for personal use. Downloading may breach a platform&apos;s terms
+        of service, and most content is protected by copyright.
       </p>
-      <ul className="mt-4 space-y-2 text-sm text-slate-400">
-        <li>• Public content only — nothing private or login-walled.</li>
-        <li>• No DRM-protected or paid content.</li>
-        <li>• For private viewing. Not for redistribution.</li>
-      </ul>
-      <button
-        type="button"
-        onClick={accept}
-        className="mt-6 w-full rounded-xl bg-accent px-4 py-3 font-medium text-white transition hover:brightness-110 active:brightness-95"
-      >
-        I have the right to download this content
-      </button>
+
+      <div className="mt-8 space-y-2.5">
+        {RULES.map(([heading, detail], index) => (
+          <div key={heading} className="flex gap-4 rounded-card bg-surface p-4">
+            <span className="figure pt-0.5 font-mono text-xs text-ink-3">
+              0{index + 1}
+            </span>
+            <span>
+              <span className="block font-medium text-ink">{heading}</span>
+              <span className="mt-0.5 block text-[13px] text-ink-3">{detail}</span>
+            </span>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-7">
+        <PrimaryButton label="I have the right to download" onClick={accept} />
+      </div>
+      <p className="mt-3.5 text-[13px] text-ink-3">Shown once.</p>
     </div>
   )
 }

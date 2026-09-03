@@ -1,31 +1,16 @@
-import { useEffect, useRef, useState } from 'react'
-import { detectPlatform, PLATFORMS } from '../platforms.js'
+import { useState } from 'react'
+import { detectPlatform } from '../platforms.js'
+import { CloseButton, PrimaryButton } from './Primitives.jsx'
 
+/**
+ * The paste field, on its own raised surface with a clear button.
+ *
+ * A boxed input with a floating label is the most recognisable stock-form tell
+ * there is, so this is borderless text on a surface instead.
+ */
 export function UrlForm({ url, onUrlChange, onSubmit, busy }) {
-  const [canPaste, setCanPaste] = useState(false)
-  const inputRef = useRef(null)
-
-  useEffect(() => {
-    // Only offer the paste shortcut where the Clipboard API actually exists
-    // (it needs a secure context and is missing on some mobile browsers).
-    setCanPaste(Boolean(navigator.clipboard?.readText))
-  }, [])
-
+  const [focused, setFocused] = useState(false)
   const platform = url.trim() ? detectPlatform(url) : null
-  const unknown = url.trim().length > 8 && !platform
-
-  const paste = async () => {
-    try {
-      const text = await navigator.clipboard.readText()
-      if (text) {
-        onUrlChange(text.trim())
-        inputRef.current?.focus()
-      }
-    } catch {
-      // Permission denied — the user can still paste manually.
-      setCanPaste(false)
-    }
-  }
 
   return (
     <form
@@ -34,14 +19,13 @@ export function UrlForm({ url, onUrlChange, onSubmit, busy }) {
         if (!busy && url.trim()) onSubmit()
       }}
     >
-      <label htmlFor="url" className="text-sm font-medium text-slate-300">
-        Paste a link
-      </label>
-
-      <div className="mt-2 flex gap-2">
+      <div
+        className={`flex items-center gap-2.5 rounded-card bg-surface px-4 py-3.5
+                    transition ${
+                      focused ? 'ring-1 ring-edge-strong' : 'ring-1 ring-edge'
+                    }`}
+      >
         <input
-          id="url"
-          ref={inputRef}
           type="url"
           inputMode="url"
           autoComplete="off"
@@ -49,42 +33,44 @@ export function UrlForm({ url, onUrlChange, onSubmit, busy }) {
           autoCapitalize="none"
           spellCheck={false}
           enterKeyHint="go"
-          placeholder="https://…"
+          placeholder="Paste a link"
+          aria-label="Paste a link"
           value={url}
           onChange={(event) => onUrlChange(event.target.value)}
-          className="min-w-0 flex-1 rounded-xl border border-edge bg-ink/60 px-4 py-3 outline-none transition placeholder:text-slate-600 focus:border-accent"
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+          className="min-w-0 flex-1 bg-transparent font-medium text-ink outline-none
+                     placeholder:text-ink-3"
         />
-        {canPaste && (
-          <button
-            type="button"
-            onClick={paste}
-            className="shrink-0 rounded-xl border border-edge px-4 py-3 text-sm text-slate-300 transition hover:border-accent hover:text-white"
-          >
-            Paste
-          </button>
-        )}
+        {url && <CloseButton onClick={() => onUrlChange('')} />}
       </div>
 
-      <div className="mt-2 h-5 text-xs">
-        {platform && <span className="text-accent">Detected: {platform.label}</span>}
-        {unknown && (
-          <span className="text-amber-400">
-            Not a recognised platform link — the server will reject it.
-          </span>
+      <div className="mt-2.5 flex h-4 items-center gap-2">
+        {platform && (
+          <span className="h-[5px] w-[5px] rounded-full bg-success" aria-hidden="true" />
         )}
+        <span
+          className={`label tracking-[0.6px] ${
+            platform ? 'text-ink-2' : 'text-ink-3'
+          }`}
+        >
+          {platform
+            ? platform.label
+            : url.trim()
+              ? 'Unrecognised site — will still try'
+              : 'Any site yt-dlp supports'}
+        </span>
       </div>
 
-      <button
-        type="submit"
-        disabled={busy || !url.trim()}
-        className="mt-3 w-full rounded-xl bg-accent px-4 py-3 font-medium text-white transition hover:brightness-110 active:brightness-95 disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        {busy ? 'Fetching…' : 'Fetch'}
-      </button>
-
-      <p className="mt-4 text-center text-xs leading-relaxed text-slate-600">
-        {PLATFORMS.map((p) => p.label).join(' · ')}
-      </p>
+      <div className="mt-[18px]">
+        <PrimaryButton
+          label="Fetch"
+          loadingLabel="Reading link"
+          loading={busy}
+          disabled={!url.trim()}
+          onClick={onSubmit}
+        />
+      </div>
     </form>
   )
 }

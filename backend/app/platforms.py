@@ -1,9 +1,16 @@
-"""Platform allow-list and URL validation.
+"""Recognises the site a link belongs to, and guards what we'll fetch.
 
-The allow-list is the primary SSRF control (PRD section 9): nothing reaches
-yt-dlp unless its hostname matches a known platform. A second check runs later
-against the *media* URLs yt-dlp hands back, since those are attacker-influenced
-in a different way.
+This used to be an allow-list that rejected anything unlisted. On the Android
+side that gate was removed — it was blocking perfectly good links (Reddit,
+Vimeo, VK, LinkedIn never reached yt-dlp at all) for no benefit, since yt-dlp
+supports well over a thousand sites.
+
+Here the reasoning is different, and worth being explicit about: the server
+*does* have an SSRF surface. Something has to stop a crafted URL pointing this
+process at an internal address. So the gate isn't removed, it's narrowed to what
+it was actually for — [validate_source_url] now rejects only non-http(s) schemes
+and hosts that resolve to private address space, and lets every public host
+through. [PLATFORMS] is left purely for labelling, matching the app.
 """
 
 from __future__ import annotations
@@ -23,29 +30,42 @@ class Platform:
     domains: tuple[str, ...]
 
 
-# Registered domains only. Subdomains are matched automatically (see
-# _host_matches), so "m.youtube.com" and "www.youtube.com" both resolve here.
+# Sites we can name on sight. Not a restriction — an unlisted host still works,
+# it just shows no label. Kept in step with android/.../domain/Platforms.kt.
 PLATFORMS: tuple[Platform, ...] = (
-    Platform(
-        "youtube",
-        "YouTube",
-        ("youtube.com", "youtu.be", "youtube-nocookie.com"),
-    ),
-    Platform("tiktok", "TikTok", ("tiktok.com", "vm.tiktok.com", "vt.tiktok.com")),
-    Platform("twitter", "X / Twitter", ("twitter.com", "x.com", "t.co")),
-    Platform("dailymotion", "Dailymotion", ("dailymotion.com", "dai.ly")),
+    Platform("youtube", "YouTube", ("youtube.com", "youtu.be", "youtube-nocookie.com")),
+    Platform("tiktok", "TikTok", ("tiktok.com",)),
+    Platform("twitter", "X", ("twitter.com", "x.com", "t.co")),
     Platform("instagram", "Instagram", ("instagram.com", "instagr.am", "ig.me")),
     Platform("facebook", "Facebook", ("facebook.com", "fb.watch", "fb.com")),
-    Platform("pinterest", "Pinterest", ("pinterest.com", "pin.it")),
-    Platform("threads", "Threads", ("threads.net", "threads.com")),
     Platform("snapchat", "Snapchat", ("snapchat.com",)),
+    Platform("threads", "Threads", ("threads.net", "threads.com")),
+    Platform("reddit", "Reddit", ("reddit.com", "redd.it", "redditmedia.com")),
+    Platform("vimeo", "Vimeo", ("vimeo.com",)),
+    Platform("dailymotion", "Dailymotion", ("dailymotion.com", "dai.ly")),
+    Platform("vk", "VK", ("vk.com", "vkvideo.ru", "vk.ru")),
+    Platform("linkedin", "LinkedIn", ("linkedin.com", "lnkd.in")),
+    Platform("pinterest", "Pinterest", ("pinterest.com", "pin.it")),
+    Platform("twitch", "Twitch", ("twitch.tv",)),
+    Platform("tumblr", "Tumblr", ("tumblr.com",)),
+    Platform("soundcloud", "SoundCloud", ("soundcloud.com", "snd.sc")),
+    Platform("ok", "OK.ru", ("ok.ru", "odnoklassniki.ru")),
+    Platform(
+        "terabox",
+        "TeraBox",
+        (
+            "terabox.com", "terabox.app", "1024terabox.com", "teraboxapp.com",
+            "teraboxlink.com", "terasharelink.com", "teraboxshare.com",
+            "4funbox.com", "mirrobox.com", "nephobox.com", "momerybox.com",
+            "tibibox.com", "freeterabox.com", "terafileshare.com",
+        ),
+    ),
 )
 
 _DOMAIN_INDEX: dict[str, Platform] = {
     domain: platform for platform in PLATFORMS for domain in platform.domains
 }
 
-# Pinterest also serves country TLDs (pinterest.co.uk, pinterest.de, ...).
 _PINTEREST_PREFIX = "pinterest."
 
 MAX_URL_LENGTH = 2048
@@ -56,22 +76,19 @@ def _host_matches(host: str, domain: str) -> bool:
 
 
 def detect_platform(url: str) -> Platform | None:
-    """Return the platform for a URL, or None if it isn't on the allow-list."""
-    try:
-        parts = urlsplit(url.strip())
-    except ValueError:
-        return None
+    """Name the site behind a URL, or None if we don't recognise it.
 
-    if parts.scheme not in ("http", "https") or not parts.hostname:
+    Hosts match a registered domain exactly or with a leading dot, so a
+    look-alike such as ``youtube.com.evil.com`` is never mistaken for YouTube.
+    """
+    host = host_of(url)
+    if host is None:
         return None
-
-    host = parts.hostname.lower().rstrip(".")
 
     for domain, platform in _DOMAIN_INDEX.items():
         if _host_matches(host, domain):
             return platform
 
-    # pinterest.<cctld> and www.pinterest.<cctld>
     bare = host[4:] if host.startswith("www.") else host
     if bare.startswith(_PINTEREST_PREFIX) and bare.count(".") <= 2:
         return _DOMAIN_INDEX["pinterest.com"]
@@ -79,10 +96,24 @@ def detect_platform(url: str) -> Platform | None:
     return None
 
 
-def validate_source_url(url: str) -> Platform:
+def host_of(url: str) -> str | None:
+    """Lowercase hostname, or None if this isn't an http(s) URL."""
+    try:
+        parts = urlsplit((url or "").strip())
+    except ValueError:
+        return None
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return None
+    return parts.hostname.lower().rstrip(".") or None
+
+
+def validate_source_url(url: str) -> Platform | None:
     """Validate a user-supplied URL, or raise AppError.
 
-    This is the only gate between untrusted input and yt-dlp.
+    Returns the recognised platform, or None for a site we can't name but will
+    still try. Unlike the Android build, this keeps a hard check that the host
+    is public — a server that fetches whatever it's told is an SSRF hazard, and
+    that is the one job this gate still has.
     """
     candidate = (url or "").strip()
 
@@ -91,21 +122,61 @@ def validate_source_url(url: str) -> Platform:
     if len(candidate) > MAX_URL_LENGTH:
         raise AppError(ErrorCode.INVALID_REQUEST, "That URL is too long.")
 
-    platform = detect_platform(candidate)
-    if platform is None:
-        supported = ", ".join(p.label for p in PLATFORMS)
+    host = host_of(candidate)
+    if host is None:
         raise AppError(
             ErrorCode.UNSUPPORTED_URL,
-            f"Only links from these platforms are supported: {supported}.",
+            "That doesn't look like a web link. Only http and https are supported.",
         )
-    return platform
+    if is_obviously_private(host):
+        raise AppError(
+            ErrorCode.UNSUPPORTED_URL,
+            "That address isn't reachable from the public internet.",
+        )
+
+    return detect_platform(candidate)
+
+
+# Names that never belong to a public host.
+_PRIVATE_SUFFIXES = (".local", ".internal", ".lan", ".home", ".localdomain")
+_PRIVATE_NAMES = frozenset({"localhost", "ip6-localhost", "ip6-loopback"})
+
+
+def is_obviously_private(host: str) -> bool:
+    """Reject private addresses without a DNS lookup.
+
+    Deliberately syntactic. [is_private_host] resolves names, which is the right
+    check for the media URLs we actually fetch, but doing it on every submitted
+    URL would put a DNS round-trip in the request path and make the result
+    depend on the network. The realistic case here — somebody pasting
+    ``http://169.254.169.254/`` or ``http://localhost:8000/`` — is caught by
+    inspection, and streaming.py still resolves and re-checks every media URL
+    before a single byte is fetched.
+    """
+    if not host:
+        return True
+    name = host.lower().rstrip(".")
+    if name in _PRIVATE_NAMES or name.endswith(_PRIVATE_SUFFIXES):
+        return True
+    try:
+        ip = ipaddress.ip_address(name.strip("[]"))
+    except ValueError:
+        return False  # a normal hostname; the media-URL check covers the rest
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    )
 
 
 def is_private_host(host: str) -> bool:
     """True if a hostname resolves to a non-public address.
 
-    Used on the media URLs yt-dlp returns so a crafted page can't point the
-    server at its own metadata service or an internal host.
+    Applied to the URL the user supplies and again to the media URLs yt-dlp
+    returns, so neither can point the server at its own metadata service.
     """
     if not host:
         return True

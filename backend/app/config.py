@@ -55,6 +55,13 @@ class Settings(BaseSettings):
     # Block media URLs that resolve to private/loopback addresses.
     block_private_media_hosts: bool = True
 
+    # Optional proxy for sites the host's network blocks outright. Some sites
+    # fail with a connection reset before extraction even starts — TikTok is
+    # ISP-blocked in several countries, ok.ru in others. No extractor fix helps
+    # with that; routing the request elsewhere does.
+    # Accepts anything httpx/yt-dlp does, e.g. socks5://host:1080.
+    proxy: str = ""
+
     # --- Ops ----------------------------------------------------------------
     log_level: str = "INFO"
 

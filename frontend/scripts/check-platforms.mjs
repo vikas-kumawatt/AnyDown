@@ -18,11 +18,22 @@ function eq(name, got, want) {
 
 const ALLOWED = [
   ['https://www.youtube.com/watch?v=abc', 'youtube'],
+  ['https://www.reddit.com/r/x/comments/1/y/', 'reddit'],
+  ['https://v.redd.it/abc', 'reddit'],
+  ['https://vimeo.com/22439234', 'vimeo'],
+  ['https://vk.com/video-1_2', 'vk'],
+  ['https://www.linkedin.com/posts/x', 'linkedin'],
+  ['https://www.twitch.tv/videos/1', 'twitch'],
+  ['https://soundcloud.com/a/b', 'soundcloud'],
+  ['https://ok.ru/video/1', 'ok'],
+  ['https://terabox.com/s/1abc', 'terabox'],
+  ['https://www.4funbox.com/s/1abc', 'terabox'],
   ['https://youtu.be/abc', 'youtube'],
   ['https://m.youtube.com/watch?v=abc', 'youtube'],
   ['https://www.tiktok.com/@u/video/1', 'tiktok'],
   ['https://vm.tiktok.com/ZM123/', 'tiktok'],
   ['https://x.com/u/status/1', 'twitter'],
+  ['https://notthreads.net/x', null],
   ['https://twitter.com/u/status/1', 'twitter'],
   ['https://www.dailymotion.com/video/x1', 'dailymotion'],
   ['https://dai.ly/x1', 'dailymotion'],
@@ -46,15 +57,16 @@ const REJECTED = [
   'https://youtube.com.evil.com/watch?v=1',
   'https://notyoutube.com/watch?v=1',
   'https://tiktok.com.attacker.net/v/1',
+  'https://terabox.com.evil.net/s/1abc',
   '',
   'not a url',
 ]
 
-for (const [url, id] of ALLOWED) eq(`allow ${url}`, detectPlatform(url)?.id, id)
+for (const [url, id] of ALLOWED) eq(`allow ${url}`, detectPlatform(url)?.id ?? null, id)
 for (const url of REJECTED) eq(`reject ${url}`, detectPlatform(url), null)
 
 eq('trailing dot host', detectPlatform('https://www.youtube.com./watch?v=abc')?.id, 'youtube')
-eq('platform count', PLATFORMS.length, 9)
+eq('platform count', PLATFORMS.length, 18)
 
 eq('bytes: zero is hidden', formatBytes(0), null)
 eq('bytes: mb', formatBytes(8200000), '7.8 MB')

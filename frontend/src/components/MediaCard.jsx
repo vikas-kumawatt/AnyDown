@@ -1,65 +1,70 @@
 import { formatBytes, formatDuration } from '../format.js'
+import { MetaRow, QualityCard } from './Primitives.jsx'
 
-const KIND_NOTE = {
-  merge: 'merged on the fly',
-  audio: 'audio only',
+const NOTE = {
+  best: 'Recommended — best available',
+  merge: 'Video + audio, combined server-side',
+  audio: 'Audio only',
+  image: 'Still image',
+  progressive: 'Single stream',
 }
 
 export function MediaCard({ media, onDownload, startedId }) {
   const duration = formatDuration(media.duration)
 
   return (
-    <section className="overflow-hidden rounded-2xl border border-edge bg-panel/70 backdrop-blur">
-      {media.thumbnail && (
-        <img
-          src={media.thumbnail}
-          alt=""
-          loading="lazy"
-          referrerPolicy="no-referrer"
-          className="aspect-video w-full bg-ink object-cover"
-          onError={(event) => {
-            event.currentTarget.style.display = 'none'
-          }}
-        />
-      )}
-
-      <div className="p-4">
-        <h2 className="text-base font-semibold leading-snug">{media.title}</h2>
-        <p className="mt-1 text-xs text-slate-400">
-          {[media.uploader, duration, media.platform].filter(Boolean).join(' · ')}
-        </p>
-
-        <ul className="mt-4 space-y-2">
-          {media.formats.map((format) => {
-            const size = formatBytes(format.filesize_approx)
-            const note = KIND_NOTE[format.kind]
-            return (
-              <li key={format.id}>
-                <button
-                  type="button"
-                  onClick={() => onDownload(format)}
-                  className="flex w-full items-center justify-between gap-3 rounded-xl border border-edge bg-ink/50 px-4 py-3 text-left transition hover:border-accent active:brightness-95"
-                >
-                  <span className="min-w-0">
-                    <span className="block font-medium">{format.label}</span>
-                    {note && (
-                      <span className="block text-xs text-slate-500">{note}</span>
-                    )}
-                  </span>
-                  <span className="shrink-0 text-sm text-slate-400">
-                    {startedId === format.id ? 'Starting…' : size || '—'}
-                  </span>
-                </button>
-              </li>
-            )
-          })}
-        </ul>
-
-        <p className="mt-4 text-xs leading-relaxed text-slate-500">
-          Sizes are estimates from the platform. The file streams straight to your
-          device — nothing is stored on the server.
-        </p>
+    <section>
+      <div className="aspect-video overflow-hidden rounded-card bg-surface">
+        {media.thumbnail ? (
+          <img
+            src={media.thumbnail}
+            alt=""
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            className="h-full w-full object-cover"
+            onError={(event) => {
+              event.currentTarget.style.display = 'none'
+            }}
+          />
+        ) : (
+          <div className="flex h-full items-center justify-center">
+            <img src="/icon.png" alt="" width="52" height="52" className="opacity-35" />
+          </div>
+        )}
       </div>
+
+      <h2 className="mt-[18px] text-[19px] font-bold leading-[26px] tracking-[-0.3px]">
+        {media.title}
+      </h2>
+
+      <div className="mt-3 rounded-card bg-surface px-4 py-1.5">
+        {media.uploader && <MetaRow label="Source" value={media.uploader} />}
+        {duration && <MetaRow label="Length" value={duration} />}
+        <MetaRow label="Options" value={String(media.formats.length)} />
+      </div>
+
+      <h3 className="label mt-7 tracking-[1.6px] text-ink">Choose quality</h3>
+
+      <div className="mt-3 space-y-2.5">
+        {media.formats.map((format) => (
+          <QualityCard
+            key={format.id}
+            headline={format.label}
+            note={NOTE[format.kind] || NOTE.progressive}
+            trailing={
+              startedId === format.id
+                ? 'Starting…'
+                : formatBytes(format.filesize_approx) || '—'
+            }
+            onClick={() => onDownload(format)}
+          />
+        ))}
+      </div>
+
+      <p className="mt-4 text-[13px] leading-5 text-ink-3">
+        Sizes are the platform&apos;s estimate. The file streams straight to your
+        device — nothing is stored on the server.
+      </p>
     </section>
   )
 }

@@ -23,10 +23,11 @@ from yt_dlp.utils import DownloadError, ExtractorError, UnsupportedError
 from .cache import TTLCache
 from .config import get_settings
 from .errors import AppError, ErrorCode, classify_extractor_error
+from .resolvers import DirectResult
 
 logger = logging.getLogger(__name__)
 
-PlanKind = Literal["progressive", "merge", "audio"]
+PlanKind = Literal["best", "progressive", "merge", "audio", "image"]
 
 # Protocols we can actually stream. Anything else (rtmp, ism, ...) is dropped
 # rather than half-supported.
@@ -40,6 +41,13 @@ _MP4_COMPATIBLE_EXTS = frozenset({"mp4", "m4a", "m4v", "mov", "3gp", "aac"})
 
 _AUDIO_EXT_PREFERENCE = {"m4a": 3, "mp4": 3, "webm": 2, "opus": 2, "mp3": 1}
 _VIDEO_EXT_PREFERENCE = {"mp4": 3, "mov": 2, "webm": 1}
+
+# Extensions that are audio even when the extractor reports no codecs.
+_AUDIO_EXTS = frozenset({"m4a", "mp3", "opus", "aac", "ogg", "oga", "wav", "flac"})
+# Pins, and any other extractor that serves stills.
+_IMAGE_EXTS = frozenset({"jpg", "jpeg", "png", "webp", "gif", "heic", "avif"})
+# More image sizes than this is noise rather than choice.
+_MAX_IMAGE_OPTIONS = 3
 
 _info_cache = TTLCache(
     maxsize=get_settings().resolve_cache_size,
@@ -91,6 +99,7 @@ def _ydl_opts() -> dict[str, Any]:
         # app is public-content-only by design (PRD section 3).
         "cachedir": False,
         "geo_bypass": True,
+        **({"proxy": settings.proxy} if settings.proxy else {}),
     }
 
 
@@ -214,119 +223,235 @@ def _quality_label(height: int, ext: str) -> str:
     return f"{fps_free} {ext.upper()}"
 
 
-def build_plans(info: dict[str, Any]) -> dict[str, DownloadPlan]:
+def _bucket_key(fmt: dict[str, Any]) -> str:
+    """Resolution where known, format id where it isn't.
+
+    Keying everything by height was the Pinterest bug: its HLS renditions all
+    report no height, so every one of them landed in the same bucket, only one
+    survived, and the winner could be an audio-only rendition — which is why
+    "Original quality (MP4)" downloaded audio.
+    """
+    height = fmt.get("height")
+    if isinstance(height, int) and height > 0:
+        return f"h{height}"
+    return f"f{fmt.get('format_id', id(fmt))}"
+
+
+def _height_of(fmt: dict[str, Any]) -> int:
+    height = fmt.get("height")
+    return height if isinstance(height, int) and height > 0 else 0
+
+
+def build_plans(
+    info: dict[str, Any], *, can_merge: bool = True
+) -> dict[str, DownloadPlan]:
     """Build the ordered, de-duplicated set of offered downloads.
 
-    One entry per distinct resolution (best quality wins within a resolution),
-    preferring a single progressive stream over a merge because that path needs
-    no ffmpeg at all. Plus one audio-only entry.
+    One entry per distinct resolution, preferring a single progressive stream
+    over a merge because that needs no ffmpeg. Plus a "Best available" row, one
+    audio-only entry, and any still images.
+
+    No resolution cap: it's the operator's own server and storage, so every
+    resolution the platform reports is offered, matching the Android build.
     """
-    settings = get_settings()
     duration = info.get("duration")
     if not isinstance(duration, (int, float)):
         duration = None
 
-    progressive: dict[int, dict[str, Any]] = {}
-    video_only: dict[int, dict[str, Any]] = {}
+    progressive: dict[str, dict[str, Any]] = {}
+    video_only: dict[str, dict[str, Any]] = {}
     audio_only: list[dict[str, Any]] = []
+    images: dict[str, dict[str, Any]] = {}
 
     for fmt in _usable_formats(info):
+        ext = str(fmt.get("ext") or "").lower()
         vcodec = _codec(fmt.get("vcodec"))
         acodec = _codec(fmt.get("acodec"))
-        has_video_field = "vcodec" in fmt or "acodec" in fmt
 
-        if vcodec and acodec:
+        if ext in _IMAGE_EXTS:
+            bucket = images
+        elif vcodec and acodec:
             bucket = progressive
-        elif vcodec and not acodec:
+        elif vcodec:
             bucket = video_only
-        elif acodec and not vcodec:
+        elif acodec:
             audio_only.append(fmt)
             continue
-        elif not has_video_field:
-            # Extractor didn't report codecs (common on TikTok/Pinterest).
-            # Assume a self-contained stream, which is what those serve.
-            bucket = progressive
+        elif ext in _AUDIO_EXTS:
+            # No codec information at all. Trust the extension: an .m4a with
+            # unknown codecs is audio, not a video we should headline.
+            audio_only.append(fmt)
+            continue
         else:
-            continue
+            # Unknown codecs on a non-image format. Older builds threw these
+            # away, which silently broke Pinterest — it reports pin media with
+            # no codec information. yt-dlp can still fetch them.
+            bucket = progressive
 
-        height = fmt.get("height")
-        if not isinstance(height, int) or height <= 0:
-            # Unknown resolution but playable; bucket it under 0 so it still
-            # gets offered when nothing better exists.
-            height = 0
-        if height > settings.max_height:
-            continue
-
-        current = bucket.get(height)
+        key = _bucket_key(fmt)
+        current = bucket.get(key)
         if current is None or _video_rank(fmt) > _video_rank(current):
-            bucket[height] = fmt
+            bucket[key] = fmt
 
     best_audio = max(audio_only, key=_audio_rank, default=None)
 
     plans: dict[str, DownloadPlan] = {}
+    has_video = bool(progressive or video_only)
 
-    for height in sorted(set(progressive) | set(video_only), reverse=True):
-        if height in progressive:
-            fmt = progressive[height]
+    def add(plan: DownloadPlan) -> None:
+        plans[plan.id] = plan
+
+    # Known resolutions descending, then bitrate descending.
+    #
+    # The bitrate tie-break matters: when an extractor reports no heights at all
+    # (Pinterest), every key ties on height, and falling back to insertion order
+    # would put the *worst* rendition first — yt-dlp lists formats worst-first.
+    def order_key(key: str) -> tuple[int, float]:
+        fmt = progressive.get(key) or video_only[key]
+        tbr = fmt.get("tbr") or fmt.get("vbr") or 0
+        return (-_height_of(fmt), -float(tbr))
+
+    ordered = sorted(set(progressive) | set(video_only), key=order_key)
+
+    for key in ordered:
+        fmt = progressive.get(key)
+        if fmt is not None:
             source = _to_source(fmt)
             needs_ffmpeg = source.protocol not in _DIRECT_PROTOCOLS
             container = _container_for(source.ext) if needs_ffmpeg else None
             ext = container_ext(container) if needs_ffmpeg else source.ext
-            plan = DownloadPlan(
-                id=f"p-{fmt.get('format_id', height)}",
-                kind="progressive",
-                label=_label_for(height, ext),
-                ext=ext,
-                height=height or None,
-                filesize=_estimate_size(fmt, duration),
-                video=source,
-                audio=None,
-                needs_ffmpeg=needs_ffmpeg,
-                container=container,
+            add(
+                DownloadPlan(
+                    id=f"p-{fmt.get('format_id', key)}",
+                    kind="progressive",
+                    label=_label_for(_height_of(fmt), ext),
+                    ext=ext,
+                    height=_height_of(fmt) or None,
+                    filesize=_estimate_size(fmt, duration),
+                    video=source,
+                    audio=None,
+                    needs_ffmpeg=needs_ffmpeg,
+                    container=container,
+                )
             )
-        elif best_audio is not None:
-            v_fmt = video_only[height]
-            v_source = _to_source(v_fmt)
-            a_source = _to_source(best_audio)
-            container = _container_for(v_source.ext, a_source.ext)
-            v_size = _estimate_size(v_fmt, duration)
-            a_size = _estimate_size(best_audio, duration)
-            plan = DownloadPlan(
-                id=f"m-{v_fmt.get('format_id', height)}+{best_audio.get('format_id', 'a')}",
+            continue
+
+        if not can_merge or best_audio is None:
+            continue
+        v_fmt = video_only[key]
+        v_source = _to_source(v_fmt)
+        a_source = _to_source(best_audio)
+        container = _container_for(v_source.ext, a_source.ext)
+        v_size = _estimate_size(v_fmt, duration)
+        a_size = _estimate_size(best_audio, duration)
+        add(
+            DownloadPlan(
+                id=f"m-{v_fmt.get('format_id', key)}+{best_audio.get('format_id', 'a')}",
                 kind="merge",
-                label=_label_for(height, container_ext(container)),
+                label=_label_for(_height_of(v_fmt), container_ext(container)),
                 ext=container_ext(container),
-                height=height or None,
+                height=_height_of(v_fmt) or None,
                 filesize=(v_size + a_size) if (v_size and a_size) else None,
                 video=v_source,
                 audio=a_source,
                 needs_ffmpeg=True,
                 container=container,
             )
-        else:
-            # Video-only stream with no audio track available to merge with.
-            continue
-
-        plans[plan.id] = plan
+        )
 
     if best_audio is not None:
         source = _to_source(best_audio)
         needs_ffmpeg = source.protocol not in _DIRECT_PROTOCOLS
         ext = "m4a" if needs_ffmpeg and source.ext in _MP4_COMPATIBLE_EXTS else source.ext
+        add(
+            DownloadPlan(
+                id=f"a-{best_audio.get('format_id', 'audio')}",
+                kind="audio",
+                label=f"Audio only ({ext.upper()})",
+                ext=ext,
+                height=None,
+                filesize=_estimate_size(best_audio, duration),
+                video=None,
+                audio=source,
+                needs_ffmpeg=needs_ffmpeg,
+                container=_container_for(source.ext) if needs_ffmpeg else None,
+            )
+        )
+
+    for fmt in sorted(images.values(), key=_height_of, reverse=True)[:_MAX_IMAGE_OPTIONS]:
+        source = _to_source(fmt)
+        height = _height_of(fmt)
+        add(
+            DownloadPlan(
+                id=f"i-{fmt.get('format_id', 'image')}",
+                kind="image",
+                label=(
+                    f"Image {height}px ({source.ext.upper()})"
+                    if height
+                    else f"Image ({source.ext.upper()})"
+                ),
+                ext=source.ext,
+                height=height or None,
+                filesize=_estimate_size(fmt, duration),
+                video=source,
+                audio=None,
+                needs_ffmpeg=False,
+                container=None,
+            )
+        )
+
+    # "Best available", offered first.
+    #
+    # The Android build passes yt-dlp the selector `bv*+ba/b` and lets it
+    # choose. Here the server does its own selection and streams the result, so
+    # there is nothing to hand a selector to — this aliases the top-ranked plan
+    # instead. Same promise to the user, reached differently.
+    if plans and (has_video or best_audio is not None):
+        first = next(iter(plans.values()))
+        best = DownloadPlan(
+            id="best",
+            kind="best",
+            label="Best available",
+            ext=first.ext,
+            height=first.height,
+            filesize=first.filesize,
+            video=first.video,
+            audio=first.audio,
+            needs_ffmpeg=first.needs_ffmpeg,
+            container=first.container,
+        )
+        plans = {"best": best, **plans}
+
+    return plans
+
+
+def build_plans_from_direct(result: "DirectResult") -> dict[str, DownloadPlan]:
+    """Turn custom-resolver output into plans the streaming path already knows.
+
+    A direct URL is just a progressive source with required headers, so it needs
+    no new streaming code — `open_direct_stream` handles it unchanged.
+    """
+    plans: dict[str, DownloadPlan] = {}
+    for index, media in enumerate(result.media):
+        source = MediaSource(
+            url=media.url,
+            ext=media.ext,
+            protocol="https",
+            headers=dict(media.headers),
+        )
         plan = DownloadPlan(
-            id=f"a-{best_audio.get('format_id', 'audio')}",
-            kind="audio",
-            label=f"Audio only ({ext.upper()})",
-            ext=ext,
-            height=None,
-            filesize=_estimate_size(best_audio, duration),
-            video=None,
-            audio=source,
-            needs_ffmpeg=needs_ffmpeg,
-            container=_container_for(source.ext) if needs_ffmpeg else None,
+            id=f"d-{index}",
+            kind="image" if media.kind == "image" else "progressive",
+            label=media.label,
+            ext=media.ext,
+            height=media.height,
+            filesize=media.size_bytes,
+            video=source,
+            audio=None,
+            needs_ffmpeg=False,
+            container=None,
         )
         plans[plan.id] = plan
-
     return plans
 
 

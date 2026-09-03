@@ -23,8 +23,16 @@ from slowapi.errors import RateLimitExceeded
 from . import __version__
 from .config import get_settings
 from .errors import AppError, ErrorCode
-from .extractor import DownloadPlan, build_plans, pick_fallback_plan, resolve
+from . import resolvers
+from .extractor import (
+    DownloadPlan,
+    build_plans,
+    build_plans_from_direct,
+    pick_fallback_plan,
+    resolve,
+)
 from .platforms import MAX_URL_LENGTH, validate_source_url
+from .url_normalizer import normalize
 from .schemas import (
     ErrorResponse,
     FormatOption,
@@ -179,12 +187,38 @@ async def handle_unexpected(request: Request, exc: Exception) -> JSONResponse:
 # --------------------------------------------------------------------------
 
 
+async def _plans_for(url: str, *, use_cache: bool = True):
+    """Resolve a URL to plans, trying custom resolvers before yt-dlp.
+
+    Returns ``(metadata, plans)``. Sites yt-dlp has no extractor for — Threads,
+    TeraBox — are handled by hand first; a resolver returning nothing falls
+    through, so this can only ever help.
+    """
+    normalized = normalize(url.strip())
+
+    if resolvers.handles(normalized):
+        direct = await resolvers.resolve(normalized)
+        if direct is not None:
+            return (
+                {
+                    "title": direct.title,
+                    "thumbnail": direct.thumbnail,
+                    "duration": direct.duration,
+                    "uploader": direct.uploader,
+                },
+                build_plans_from_direct(direct),
+            )
+        logger.info("custom resolver found nothing; falling back to yt-dlp")
+
+    info = await resolve(normalized, use_cache=use_cache)
+    return info, build_plans(info)
+
+
 @app.post("/api/resolve", response_model=ResolveResponse)
 @limiter.limit(_RATE_LIMIT)
 async def api_resolve(request: Request, payload: ResolveRequest) -> ResolveResponse:
     platform = validate_source_url(payload.url)
-    info = await resolve(payload.url.strip())
-    plans = build_plans(info)
+    info, plans = await _plans_for(payload.url)
 
     if not plans:
         raise AppError(
@@ -195,7 +229,8 @@ async def api_resolve(request: Request, payload: ResolveRequest) -> ResolveRespo
 
     duration = info.get("duration")
     return ResolveResponse(
-        platform=platform.id,
+        # None when we don't recognise the site — it still works, just unlabelled.
+        platform=platform.id if platform else "other",
         title=str(info.get("title") or "Untitled"),
         thumbnail=info.get("thumbnail"),
         duration=int(duration) if isinstance(duration, (int, float)) else None,
@@ -230,14 +265,12 @@ async def api_download(
     validate_source_url(url)
     clean_url = url.strip()
 
-    info = await resolve(clean_url)
-    plans = build_plans(info)
+    info, plans = await _plans_for(clean_url)
     plan = plans.get(formatId)
 
     if plan is None:
         # The cached metadata may predate a platform-side format change.
-        info = await resolve(clean_url, use_cache=False)
-        plans = build_plans(info)
+        info, plans = await _plans_for(clean_url, use_cache=False)
         plan = plans.get(formatId)
 
     if plan is None:

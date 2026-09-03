@@ -4,7 +4,10 @@ const APP_KEY = import.meta.env.VITE_APP_KEY || ''
 // Messages the UI shows for each backend error code. Anything unrecognised
 // falls back to the server's own message.
 const FRIENDLY = {
-  UNSUPPORTED_URL: "That link isn't from a platform this app supports.",
+  UNSUPPORTED_URL: "That link can't be used — check it's a public http(s) address.",
+  NEEDS_FFMPEG:
+    'This link only offers separate video and audio tracks, which the server ' +
+    "needs ffmpeg to combine — and ffmpeg isn't available.",
   PRIVATE_CONTENT:
     'That content is private or login-walled. Only public content works.',
   RATE_LIMITED: 'Too many requests. Wait a minute and try again.',
@@ -14,9 +17,12 @@ const FRIENDLY = {
 }
 
 export class ApiError extends Error {
-  constructor(code, message) {
+  constructor(code, message, detail) {
     super(message)
     this.code = code
+    // The server's own words, shown behind "Show details". A polished lie is
+    // worse than the raw line when a platform breaks.
+    this.detail = detail
   }
 }
 
@@ -49,7 +55,12 @@ export async function resolveMedia(url, signal) {
 
   if (!response.ok) {
     const code = body?.error || 'EXTRACTION_FAILED'
-    throw new ApiError(code, FRIENDLY[code] || body?.message || 'Something went wrong.')
+    throw new ApiError(
+      code,
+      FRIENDLY[code] || body?.message || 'Something went wrong.',
+      // Only worth surfacing when it says more than the friendly line does.
+      FRIENDLY[code] ? body?.message : undefined,
+    )
   }
   return body
 }

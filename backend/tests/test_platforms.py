@@ -54,10 +54,40 @@ def test_rejected_urls(url: str) -> None:
     assert detect_platform(url) is None
 
 
-def test_validate_raises_unsupported() -> None:
-    with pytest.raises(AppError) as exc:
-        validate_source_url("https://evil.com/video")
-    assert exc.value.code is ErrorCode.UNSUPPORTED_URL
+def test_unknown_public_sites_are_allowed_through() -> None:
+    """The gate no longer restricts by platform.
+
+    It was blocking good links (Reddit, Vimeo, VK, LinkedIn never reached
+    yt-dlp) for no benefit. An unrecognised public host is now simply
+    unlabelled.
+    """
+    assert validate_source_url("https://some-video-site.example/v/1") is None
+    assert validate_source_url("https://www.reddit.com/r/x/comments/1/y/") is not None
+
+
+def test_validate_rejects_non_http_and_private_hosts() -> None:
+    """What the gate is still for: keeping the server off its own network."""
+    for url in (
+        "ftp://youtube.com/x",
+        "file:///etc/passwd",
+        "not a url",
+    ):
+        with pytest.raises(AppError) as exc:
+            validate_source_url(url)
+        assert exc.value.code is ErrorCode.UNSUPPORTED_URL, url
+
+    for url in (
+        "http://localhost:8000/admin",
+        "http://127.0.0.1/x",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://10.0.0.5/internal",
+        "http://192.168.1.1/",
+        "http://[::1]/",
+        "http://printer.local/",
+    ):
+        with pytest.raises(AppError) as exc:
+            validate_source_url(url)
+        assert exc.value.code is ErrorCode.UNSUPPORTED_URL, url
 
 
 def test_validate_raises_on_empty() -> None:

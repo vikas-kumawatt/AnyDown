@@ -48,8 +48,11 @@ object UrlNormalizer {
     fun isShortLink(url: String): Boolean {
         val host = hostOf(url)?.removePrefix("www.") ?: return false
         if (host in SHORTENERS) return true
-        // Threads share links redirect to the real post.
-        return host.endsWith("threads.net") || host.endsWith("threads.com")
+        // Threads share links redirect to the real post. Exact match or a real
+        // subdomain — a bare endsWith would accept "notthreads.net".
+        return listOf("threads.net", "threads.com").any { domain ->
+            host == domain || host.endsWith(".$domain")
+        }
     }
 
     /**

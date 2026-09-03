@@ -56,8 +56,11 @@ def test_resolve_returns_expected_shape(client: TestClient, stub_resolve) -> Non
     assert "http_headers" not in response.text
 
 
-def test_resolve_rejects_unsupported_domain(client: TestClient) -> None:
-    response = client.post("/api/resolve", json={"url": "https://evil.com/v"})
+def test_resolve_rejects_private_addresses(client: TestClient) -> None:
+    """The gate now guards the network, not the platform list."""
+    response = client.post(
+        "/api/resolve", json={"url": "http://169.254.169.254/latest/meta-data/"}
+    )
     assert response.status_code == 400
     assert response.json()["error"] == ErrorCode.UNSUPPORTED_URL.value
 
@@ -104,9 +107,9 @@ def test_download_rejects_unknown_format_id(
     assert len(stub_resolve) == 2
 
 
-def test_download_rejects_unsupported_domain(client: TestClient) -> None:
+def test_download_rejects_private_addresses(client: TestClient) -> None:
     response = client.get(
-        "/api/download", params={"url": "https://evil.com/v", "formatId": "p-18"}
+        "/api/download", params={"url": "http://127.0.0.1/v", "formatId": "p-18"}
     )
     assert response.status_code == 400
     assert response.json()["error"] == ErrorCode.UNSUPPORTED_URL.value
