@@ -16,11 +16,14 @@ os.environ.setdefault("APP_BLOCK_PRIVATE_MEDIA_HOSTS", "false")
 
 @pytest.fixture(autouse=True)
 def _clear_extractor_cache():
+    from app import resolvers
     from app.extractor import clear_cache
 
     clear_cache()
+    resolvers.clear_cache()
     yield
     clear_cache()
+    resolvers.clear_cache()
 
 
 @pytest.fixture

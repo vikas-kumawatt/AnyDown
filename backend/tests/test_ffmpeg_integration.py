@@ -19,6 +19,7 @@ import subprocess
 import tempfile
 import threading
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -32,8 +33,8 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture(scope="module")
-def media_server():
-    """Serve a generated video-only and audio-only file over HTTP."""
+def media_dir():
+    """A generated video-only and audio-only file."""
     directory = tempfile.mkdtemp(prefix="dl-test-")
 
     subprocess.run(
@@ -49,19 +50,82 @@ def media_server():
          "-c:a", "aac", "-vn", f"{directory}/audio.m4a"],
         check=True, timeout=90,
     )
+    yield directory
+    shutil.rmtree(directory, ignore_errors=True)
 
-    handler = functools.partial(
-        http.server.SimpleHTTPRequestHandler, directory=directory
-    )
-    server = socketserver.TCPServer(("127.0.0.1", 0), handler)
+
+def _serve(handler):
+    server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), handler)
+    server.daemon_threads = True
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+    return server
 
+
+@pytest.fixture(scope="module")
+def media_server(media_dir: str):
+    """Serve the generated files over plain HTTP."""
+    handler = functools.partial(
+        http.server.SimpleHTTPRequestHandler, directory=media_dir
+    )
+    server = _serve(handler)
     yield f"http://127.0.0.1:{server.server_address[1]}"
-
     server.shutdown()
     server.server_close()
-    shutil.rmtree(directory, ignore_errors=True)
+
+
+# Small enough that the generated files take several ranges each.
+RANGE_LIMIT = 4 * 1024
+
+
+class _StrictRangeHandler(http.server.BaseHTTPRequestHandler):
+    """Behaves like YouTube's media host: ranged requests only, and small ones.
+
+    A request without a Range, or for more than RANGE_LIMIT bytes, is refused,
+    so a test passes only if the client really fetched in chunks.
+    """
+
+    # Both replaced per server by the ranged_server fixture.
+    directory = ""
+    requests: ClassVar[list[str]] = []
+
+    def do_GET(self):
+        path = Path(self.directory) / self.path.lstrip("/")
+        if not path.is_file():
+            self.send_error(404)
+            return
+        data = path.read_bytes()
+        spec = self.headers.get("Range", "")
+        type(self).requests.append(spec)
+        if not spec.startswith("bytes="):
+            self.send_error(403, "ranged requests only")
+            return
+        start_s, _, end_s = spec[len("bytes="):].partition("-")
+        start = int(start_s)
+        end = min(int(end_s) if end_s else len(data) - 1, len(data) - 1)
+        if end - start + 1 > RANGE_LIMIT:
+            self.send_error(403, "range too large")
+            return
+        body = data[start : end + 1]
+        self.send_response(206)
+        self.send_header("Content-Range", f"bytes {start}-{end}/{len(data)}")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def ranged_server(media_dir: str):
+    handler = type("Handler", (_StrictRangeHandler,), {
+        "directory": media_dir, "requests": [],
+    })
+    server = _serve(handler)
+    yield f"http://127.0.0.1:{server.server_address[1]}", handler
+    server.shutdown()
+    server.server_close()
 
 
 def _probe(path: Path) -> list[dict]:
@@ -164,3 +228,85 @@ async def test_client_disconnect_kills_ffmpeg(media_server: str, monkeypatch):
 
     assert len(spawned) == 1
     assert spawned[0].returncode is not None, "ffmpeg was left running"
+
+
+async def test_chunked_sources_are_fetched_in_ranges_and_merged(
+    ranged_server, tmp_path: Path
+):
+    """YouTube-style sources: ffmpeg can't fetch them itself without throttling."""
+    base, handler = ranged_server
+    plan = DownloadPlan(
+        id="m-v+a", kind="merge", label="test", ext="mp4", height=240,
+        filesize=None,
+        video=MediaSource(f"{base}/video.mp4", "mp4", "https", {}, RANGE_LIMIT),
+        audio=MediaSource(f"{base}/audio.m4a", "m4a", "https", {}, RANGE_LIMIT),
+        needs_ffmpeg=True, container="mp4",
+    )
+
+    output = await _collect(plan, tmp_path)
+
+    kinds = sorted(s["codec_type"] for s in _probe(output))
+    assert kinds == ["audio", "video"]
+    assert len(handler.requests) > 2, "expected several ranged requests"
+
+
+async def test_direct_stream_reassembles_ranges_exactly(ranged_server, media_dir):
+    from app.streaming import open_direct_stream
+
+    base, handler = ranged_server
+    expected = (Path(media_dir) / "video.mp4").read_bytes()
+    assert len(expected) > 2 * RANGE_LIMIT, "fixture too small to need ranges"
+
+    length, chunks = await open_direct_stream(
+        MediaSource(f"{base}/video.mp4", "mp4", "https", {}, RANGE_LIMIT)
+    )
+    body = b"".join([chunk async for chunk in chunks])
+
+    assert length == len(expected), "Content-Length must be the whole file"
+    assert body == expected
+    assert handler.requests[0] == f"bytes=0-{RANGE_LIMIT - 1}"
+
+
+async def test_unchunked_source_is_one_plain_request(media_server, media_dir):
+    from app.streaming import open_direct_stream
+
+    expected = (Path(media_dir) / "audio.m4a").read_bytes()
+    length, chunks = await open_direct_stream(
+        MediaSource(f"{media_server}/audio.m4a", "m4a", "https", {})
+    )
+    body = b"".join([chunk async for chunk in chunks])
+
+    assert length == len(expected)
+    assert body == expected
+
+
+async def test_a_host_that_stops_honouring_range_never_duplicates_bytes(
+    ranged_server, media_dir, monkeypatch
+):
+    """A 200 mid-file is the whole body again; appending it would corrupt the file."""
+    from app.streaming import open_direct_stream
+
+    base, handler = ranged_server
+    real_do_get = handler.do_GET
+
+    def flaky_do_get(self):
+        if len(handler.requests) >= 2:
+            del self.headers["Range"]
+            handler.requests.append("")
+            body = (Path(media_dir) / "video.mp4").read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        real_do_get(self)
+
+    monkeypatch.setattr(handler, "do_GET", flaky_do_get)
+
+    expected = (Path(media_dir) / "video.mp4").read_bytes()
+    _, chunks = await open_direct_stream(
+        MediaSource(f"{base}/video.mp4", "mp4", "https", {}, RANGE_LIMIT)
+    )
+    body = b"".join([chunk async for chunk in chunks])
+
+    assert body == expected[: 2 * RANGE_LIMIT], "truncated, never restarted"

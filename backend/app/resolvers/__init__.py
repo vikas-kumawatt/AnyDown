@@ -18,6 +18,7 @@ from typing import Literal
 import anyio
 import httpx
 
+from ..cache import TTLCache
 from ..config import get_settings
 from . import terabox, threads
 
@@ -54,17 +55,35 @@ class DirectResult:
     uploader: str | None = None
 
 
+# /api/download re-resolves the link it's given, so without this every download
+# scraped the post page again — and for TeraBox, two pages plus a fresh dlink.
+_cache = TTLCache(
+    maxsize=get_settings().resolve_cache_size,
+    ttl=get_settings().resolve_cache_ttl,
+)
+
+
 def handles(url: str) -> bool:
     return threads.handles(url) or terabox.handles(url)
 
 
 async def resolve(url: str) -> DirectResult | None:
     """None means "not mine, or I couldn't" — the caller then tries yt-dlp."""
+    cached = _cache.get(url)
+    if cached is not None:
+        return cached
     try:
-        return await anyio.to_thread.run_sync(_resolve_sync, url)
+        result = await anyio.to_thread.run_sync(_resolve_sync, url)
     except Exception:  # noqa: BLE001 - never let a resolver break the request
         logger.warning("custom resolve failed for %s", url, exc_info=True)
         return None
+    if result is not None:
+        _cache.set(url, result)
+    return result
+
+
+def clear_cache() -> None:
+    _cache.clear()
 
 
 def _resolve_sync(url: str) -> DirectResult | None:
