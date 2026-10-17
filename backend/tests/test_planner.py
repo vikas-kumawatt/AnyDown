@@ -201,3 +201,41 @@ def test_unknown_error_does_not_guess() -> None:
 def test_ansi_codes_do_not_break_matching() -> None:
     code, _ = classify_extractor_error("\x1b[0;31mERROR:\x1b[0m This video is private")
     assert code is ErrorCode.PRIVATE_CONTENT
+
+
+def test_chunk_size_reaches_the_media_source(youtube_info: dict) -> None:
+    """yt-dlp marks YouTube's https formats with a max request size; keep it."""
+    for fmt in youtube_info["formats"]:
+        if fmt["format_id"] in ("137", "140"):
+            fmt["downloader_options"] = {"http_chunk_size": 10 << 20}
+
+    plans = build_plans(youtube_info)
+    merge = next(p for p in plans.values() if p.id == "m-137+140")
+    assert merge.video.chunk_size == 10 << 20
+    assert merge.audio.chunk_size == 10 << 20
+    assert plans["p-18"].video.chunk_size is None
+
+
+def test_cookies_follow_their_media_url_only() -> None:
+    """yt-dlp keeps cookies out of http_headers; the stream still needs them."""
+    import http.cookiejar
+
+    import yt_dlp
+
+    from app.extractor import _attach_cookies
+
+    ydl = yt_dlp.YoutubeDL({"quiet": True})
+    ydl.cookiejar.set_cookie(http.cookiejar.Cookie(
+        0, "tt_chain_token", "abc", None, False, ".tiktok.example", True, True,
+        "/", True, True, None, False, None, None, {},
+    ))
+    info = {"formats": [
+        {"url": "https://v16.tiktok.example/video.mp4", "http_headers": {"Referer": "r"}},
+        {"url": "https://elsewhere.example/video.mp4"},
+    ]}
+
+    _attach_cookies(ydl, info)
+
+    first, second = info["formats"]
+    assert first["http_headers"] == {"Referer": "r", "Cookie": "tt_chain_token=abc"}
+    assert "http_headers" not in second, "a cookie must never leak to another host"

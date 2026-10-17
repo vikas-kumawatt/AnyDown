@@ -2,9 +2,9 @@ package com.anydown.downloader.data
 
 import android.util.Log
 import com.anydown.downloader.domain.DirectResult
+import com.anydown.downloader.domain.RedditParser
 import com.anydown.downloader.domain.TeraboxParser
 import com.anydown.downloader.domain.ThreadsParser
-import java.net.InetSocketAddress
 import java.net.Proxy
 
 /**
@@ -21,18 +21,31 @@ object CustomResolvers {
 
     private const val TAG = "CustomResolvers"
 
-    fun handles(url: String): Boolean = isThreads(url) || TeraboxParser.handles(url)
+    fun handles(url: String): Boolean =
+        isThreads(url) || TeraboxParser.handles(url) || RedditParser.handles(url)
 
-    /** Null means "not mine, or I couldn't do it" — the caller then tries yt-dlp. */
-    fun resolve(url: String, proxyUrl: String): DirectResult? = try {
-        val proxy = parseProxy(proxyUrl)
+    /**
+     * Null means "not mine, or I couldn't do it" — the caller then tries yt-dlp.
+     *
+     * [trace] collects why each step failed. A resolver failing silently and
+     * yt-dlp then failing in its own words hid the real cause; the caller adds
+     * these lines to the error details instead.
+     */
+    fun resolve(
+        url: String,
+        proxyUrl: String,
+        trace: MutableList<String> = mutableListOf(),
+    ): DirectResult? = try {
+        val proxy = Http.proxyOf(proxyUrl)
         when {
             isThreads(url) -> resolveThreads(url, proxy)
             TeraboxParser.handles(url) -> resolveTerabox(url, proxy)
+            RedditParser.handles(url) -> resolveReddit(url, proxy, trace)
             else -> null
         }
     } catch (e: Exception) {
         Log.w(TAG, "custom resolve failed for $url", e)
+        trace += "${e.javaClass.simpleName}: ${e.message}"
         null
     }
 
@@ -94,27 +107,83 @@ object CustomResolvers {
     }
 
     // ----------------------------------------------------------------------
+    // Reddit
+    // ----------------------------------------------------------------------
 
-    /** Reuses the app's proxy setting, so blocked networks work here too. */
-    private fun parseProxy(proxyUrl: String): Proxy? {
-        if (proxyUrl.isBlank()) return null
-        return try {
-            val withScheme =
-                if ("://" in proxyUrl) proxyUrl else "http://$proxyUrl"
-            val uri = java.net.URI(withScheme)
-            val host = uri.host ?: return null
-            val port = if (uri.port > 0) uri.port else 8080
-            val type = if (uri.scheme?.startsWith("socks", true) == true) {
-                Proxy.Type.SOCKS
-            } else {
-                Proxy.Type.HTTP
+    private val BROWSER_PAGE = mapOf(
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Sec-Fetch-Mode" to "navigate",
+    )
+
+    /**
+     * Mirrors the steps yt-dlp's own Reddit extractor takes, over Android's
+     * network stack, which Reddit doesn't block the way it blocks yt-dlp's.
+     */
+    private fun resolveReddit(url: String, proxy: Proxy?, trace: MutableList<String>): DirectResult? {
+        // Reddit's JSON only answers anonymous callers holding the `loid`
+        // session cookie, which old.reddit.com hands out. over18 opts in to
+        // NSFW posts, as yt-dlp does.
+        val session = step(trace, "session") {
+            Http.getText("https://old.reddit.com/", headers = BROWSER_PAGE, proxy = proxy).cookies
+        }
+        val cookies = listOfNotNull(session, "over18=1").joinToString("; ")
+
+        // Share links (`/r/<sub>/s/<code>`) name the post only in their redirect.
+        val postUrl = if (RedditParser.postId(url) != null) url else {
+            step(trace, "share link") {
+                Http.finalUrl(url, headers = BROWSER_PAGE, cookies = cookies, proxy = proxy)
+            } ?: url
+        }
+        val id = RedditParser.postId(postUrl) ?: run {
+            trace += "no post id in $postUrl"
+            return null
+        }
+
+        for (host in listOf("www.reddit.com", "old.reddit.com")) {
+            step(trace, "$host json") {
+                val body = Http.getText(
+                    RedditParser.jsonUrl(id, host),
+                    headers = mapOf("Accept" to "application/json"),
+                    cookies = cookies,
+                    proxy = proxy,
+                ).body
+                RedditParser.parseJson(body) ?: error(
+                    if (body.trimStart().startsWith("<")) "got a web page, not JSON"
+                    else "no video or image in the post"
+                )
+            }?.let {
+                Log.i(TAG, "reddit: media found via $host json")
+                return it
             }
-            Proxy(type, InetSocketAddress(host, port))
+        }
+
+        for (host in listOf("old.reddit.com", "www.reddit.com")) {
+            step(trace, "$host page") {
+                val html = Http.getText(
+                    RedditParser.pageUrl(id, host),
+                    headers = BROWSER_PAGE,
+                    cookies = cookies,
+                    proxy = proxy,
+                ).body
+                RedditParser.parseHtml(html) ?: error("no video player in the page")
+            }?.let {
+                Log.i(TAG, "reddit: media found via $host page")
+                return it
+            }
+        }
+        return null
+    }
+
+    /** Runs one resolver step; a failure is recorded in [trace] instead of thrown. */
+    private inline fun <T> step(trace: MutableList<String>, name: String, block: () -> T): T? =
+        try {
+            block()
         } catch (e: Exception) {
-            Log.w(TAG, "unusable proxy: $proxyUrl", e)
+            trace += "$name: ${e.message ?: e.javaClass.simpleName}"
             null
         }
-    }
+
+    // ----------------------------------------------------------------------
 
     private fun hostOf(url: String): String? {
         val match = Regex("^(https?)://([^/?#\\s]+)", RegexOption.IGNORE_CASE).find(url.trim())

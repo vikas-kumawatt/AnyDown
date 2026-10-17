@@ -269,3 +269,42 @@ def test_direct_media_becomes_streamable_plans() -> None:
     assert first.filesize == 10
 
     assert plans["d-1"].kind == "image"
+
+
+# --- caching ------------------------------------------------------------
+
+
+async def test_resolved_posts_are_cached_for_the_download(monkeypatch) -> None:
+    """/api/download re-resolves; it must not scrape the page a second time."""
+    from app import resolvers
+
+    calls: list[str] = []
+    result = threads.parse(page('"video_versions":[{"url":"https://scontent.x/v.mp4"}]'))
+    assert result is not None
+
+    def fake_resolve_sync(url: str):
+        calls.append(url)
+        return result
+
+    monkeypatch.setattr(resolvers, "_resolve_sync", fake_resolve_sync)
+
+    url = "https://www.threads.net/@a/post/xyz"
+    assert await resolvers.resolve(url) is result
+    assert await resolvers.resolve(url) is result
+    assert calls == [url]
+
+
+async def test_a_failed_resolve_is_retried(monkeypatch) -> None:
+    from app import resolvers
+
+    calls: list[str] = []
+
+    def fake_resolve_sync(url: str) -> None:
+        calls.append(url)
+
+    monkeypatch.setattr(resolvers, "_resolve_sync", fake_resolve_sync)
+
+    url = "https://www.threads.net/@a/post/xyz"
+    await resolvers.resolve(url)
+    await resolvers.resolve(url)
+    assert len(calls) == 2

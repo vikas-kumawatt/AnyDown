@@ -13,6 +13,11 @@ Two responsibilities, kept separate so the planning half is testable offline:
 from __future__ import annotations
 
 import logging
+import os
+import queue
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -54,6 +59,16 @@ _info_cache = TTLCache(
     ttl=get_settings().resolve_cache_ttl,
 )
 
+# yt-dlp's own cache: YouTube player code and solved JS challenges, keyed by
+# player version. Never media, never anything about who asked. Without it every
+# YouTube lookup re-downloads a ~2.5 MB player and re-runs the challenge solver,
+# which is most of the time a YouTube resolve takes.
+_YTDLP_CACHE_DIR = os.path.join(tempfile.gettempdir(), "anydown-yt-dlp")
+
+# Idle YoutubeDL instances, reused across requests. See _borrow_ydl.
+_idle_ydls: queue.SimpleQueue[yt_dlp.YoutubeDL] = queue.SimpleQueue()
+_MAX_IDLE_YDLS = 4
+
 
 @dataclass(frozen=True, slots=True)
 class MediaSource:
@@ -63,6 +78,9 @@ class MediaSource:
     ext: str
     protocol: str
     headers: dict[str, str] = field(default_factory=dict)
+    # Largest single request the host tolerates. YouTube throttles anything
+    # bigger than 10 MB to roughly playback speed, so it's fetched in ranges.
+    chunk_size: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,16 +113,53 @@ def _ydl_opts() -> dict[str, Any]:
         "socket_timeout": settings.extract_timeout,
         "retries": 2,
         "extractor_retries": 1,
-        # No cache dir and no cookies: nothing about a request persists, and the
-        # app is public-content-only by design (PRD section 3).
-        "cachedir": False,
+        # No cookie file: the app is public-content-only by design (PRD
+        # section 3). The cache dir holds player code only; see above.
+        "cachedir": _YTDLP_CACHE_DIR,
         "geo_bypass": True,
         **({"proxy": settings.proxy} if settings.proxy else {}),
     }
 
 
+@contextmanager
+def _borrow_ydl() -> Iterator[yt_dlp.YoutubeDL]:
+    """Lend out a YoutubeDL for one extraction, then take it back.
+
+    Building one per request threw away its open connections and its in-memory
+    player caches, so every lookup paid fresh TLS handshakes to the platform.
+    yt-dlp's CLI reuses one instance across URLs the same way; an instance is
+    only ever used by one extraction at a time.
+    """
+    try:
+        ydl = _idle_ydls.get_nowait()
+    except queue.Empty:
+        ydl = yt_dlp.YoutubeDL(_ydl_opts())
+    try:
+        yield ydl
+    finally:
+        if _idle_ydls.qsize() < _MAX_IDLE_YDLS:
+            _idle_ydls.put(ydl)
+        else:
+            ydl.close()
+
+
+def warm_up() -> None:
+    """Pay yt-dlp's one-off start-up costs before the first real request.
+
+    To pick an extractor, yt-dlp tests the URL against ~1,900 site patterns and
+    compiles each one the first time it's used. That cost about a second and a
+    half on the first lookup after every deploy or free-tier wake-up. Compiled
+    patterns are cached on the extractor classes, so doing it once here means
+    no request pays for it. Also builds the first pooled YoutubeDL.
+    """
+    probe = "https://warm-up.invalid/"
+    with _borrow_ydl():
+        for extractor in yt_dlp.extractor.gen_extractor_classes():
+            extractor.suitable(probe)
+
+
 def _extract_sync(url: str) -> dict[str, Any]:
-    with yt_dlp.YoutubeDL(_ydl_opts()) as ydl:
+    with _borrow_ydl() as ydl:
         info = ydl.extract_info(url, download=False)
         if info is None:
             raise AppError(
@@ -119,7 +174,28 @@ def _extract_sync(url: str) -> dict[str, Any]:
                     ErrorCode.EXTRACTION_FAILED, "That link contains no playable media."
                 )
             info = entries[0]
-        return ydl.sanitize_info(info)
+        info = ydl.sanitize_info(info)
+        _attach_cookies(ydl, info)
+        return info
+
+
+def _attach_cookies(ydl: yt_dlp.YoutubeDL, info: dict[str, Any]) -> None:
+    """Put each media URL's cookies back into its request headers.
+
+    yt-dlp stopped carrying cookies in ``http_headers`` (a 2023 security fix)
+    and keeps them in its cookie jar instead. The streaming code only sends
+    ``http_headers``, so hosts that tie the media URL to the extraction's
+    session — TikTok's CDN does — answered the download with a 403. Scoped per
+    URL by the jar itself, so a cookie never reaches a host it wasn't set for.
+    """
+    for fmt in info.get("formats") or [info]:
+        url = fmt.get("url")
+        if not url:
+            continue
+        cookies = ydl.cookiejar.get_cookies_for_url(url)
+        if cookies:
+            headers = fmt.setdefault("http_headers", {})
+            headers["Cookie"] = "; ".join(f"{c.name}={c.value}" for c in cookies)
 
 
 async def resolve(url: str, *, use_cache: bool = True) -> dict[str, Any]:
@@ -196,6 +272,7 @@ def _usable_formats(info: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _to_source(fmt: dict[str, Any]) -> MediaSource:
+    chunk_size = (fmt.get("downloader_options") or {}).get("http_chunk_size")
     return MediaSource(
         url=str(fmt["url"]),
         ext=str(fmt.get("ext") or "mp4"),
@@ -203,6 +280,7 @@ def _to_source(fmt: dict[str, Any]) -> MediaSource:
         headers={
             str(k): str(v) for k, v in (fmt.get("http_headers") or {}).items() if v
         },
+        chunk_size=chunk_size if isinstance(chunk_size, int) and chunk_size > 0 else None,
     )
 
 

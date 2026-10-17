@@ -6,4 +6,8 @@ pydantic==2.10.4
 pydantic-settings==2.7.1
 httpx==0.28.1
 slowapi==0.1.9
-yt-dlp==2025.1.26
+# curl-cffi: TLS impersonation, which the TikTok, Instagram, Facebook, Vimeo,
+#   Reddit, Dailymotion and SoundCloud extractors use to avoid being blocked.
+# deno: the JavaScript runtime yt-dlp needs to solve YouTube's player
+#   challenges. Without one, YouTube offers few formats or none.
+yt-dlp[default,curl-cffi,deno]==2026.8.19

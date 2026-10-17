@@ -85,6 +85,7 @@ class MainActivity : ComponentActivity() {
                             onClearFinished = viewModel::clearFinishedJobs,
                             onToggleAdvanced = viewModel::toggleAdvanced,
                             onProxyChange = viewModel::onProxyChange,
+                            onFindProxy = viewModel::findProxy,
                         )
                     }
                 }

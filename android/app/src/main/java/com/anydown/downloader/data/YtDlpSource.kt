@@ -22,6 +22,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 
 /**
  * The only file that talks to youtubedl-android.
@@ -52,6 +53,10 @@ object YtDlpSource {
     private const val KEY_PROXY = "proxy_url"
     private const val UPDATE_INTERVAL_MS = 24L * 60 * 60 * 1000
     private const val REDIRECT_TIMEOUT_MS = 12_000
+    private const val CACHE_SUBDIR = "yt-dlp"
+    private const val INFO_SUBDIR = "info"
+    /** Media URLs in a saved info file outlive this comfortably (YouTube's last hours). */
+    private const val INFO_MAX_AGE_MS = 30L * 60 * 1000
 
     private val initMutex = Mutex()
     @Volatile private var initialised = false
@@ -81,13 +86,23 @@ object YtDlpSource {
             .edit().putString(KEY_PROXY, proxy.trim()).apply()
     }
 
-    /** Options applied to every request: proxy, geo-bypass, playlist guard. */
+    /** Options applied to every request: proxy, geo-bypass, playlist guard, cache. */
     private fun YoutubeDLRequest.applyCommonOptions(context: Context) {
         addOption("--no-playlist")
+        // youtubedl-android passes --no-cache-dir unless a cache dir is given,
+        // so every YouTube link re-downloaded a ~2.5 MB player and re-solved
+        // its JS challenges in QuickJS — the slowest part of a YouTube fetch on
+        // a phone. The cache holds player code only, keyed by player version.
+        addOption("--cache-dir", File(context.cacheDir, CACHE_SUBDIR).absolutePath)
         addOption("--no-warnings")
         // Cheap to ask for, and gets past some region locks on its own.
         addOption("--geo-bypass")
-        getProxy(context).takeIf { it.isNotBlank() }?.let { addOption("--proxy", it) }
+        getProxy(context).takeIf { it.isNotBlank() }?.let {
+            addOption("--proxy", it)
+            // Free proxies are slow to start answering; yt-dlp's 20 s default
+            // gave up on ones that would have worked.
+            addOption("--socket-timeout", "45")
+        }
     }
 
     class SourceException(
@@ -263,8 +278,9 @@ object YtDlpSource {
 
             // Sites yt-dlp has no extractor for get resolved by hand first.
             // Returning null falls through, so this can only ever help.
+            val resolverTrace = mutableListOf<String>()
             if (CustomResolvers.handles(url)) {
-                CustomResolvers.resolve(url, getProxy(context))?.let { direct ->
+                CustomResolvers.resolve(url, getProxy(context), resolverTrace)?.let { direct ->
                     return@withContext Resolved(
                         title = direct.title,
                         thumbnail = direct.thumbnail,
@@ -276,13 +292,31 @@ object YtDlpSource {
                 Log.i(TAG, "custom resolver found nothing; falling back to yt-dlp")
             }
 
-            val request = YoutubeDLRequest(url).apply { applyCommonOptions(context) }
-
-            val info: VideoInfo = try {
-                YoutubeDL.getInstance().getInfo(request)
-            } catch (e: Exception) {
-                throw SourceException(Errors.classify(e.message), e)
+            // What getInfo does, minus throwing the raw JSON away: download()
+            // hands it back to yt-dlp so it needn't extract the page again.
+            val request = YoutubeDLRequest(url).apply {
+                applyCommonOptions(context)
+                addOption("--dump-json")
             }
+
+            val json = try {
+                YoutubeDL.getInstance().execute(request, null, null).out
+            } catch (e: Exception) {
+                val classified = Errors.classify(e.message)
+                // When the built-in resolver tried first, its reasons matter more
+                // than yt-dlp's: yt-dlp is only the fallback for these sites.
+                val detail = if (resolverTrace.isEmpty()) classified.detail else listOfNotNull(
+                    "Built-in resolver:\n" + resolverTrace.joinToString("\n") { "• $it" },
+                    classified.detail?.let { "yt-dlp:\n$it" },
+                ).joinToString("\n\n")
+                throw SourceException(classified.copy(detail = detail), e)
+            }
+            val info: VideoInfo = try {
+                YoutubeDL.objectMapper.readValue(json, VideoInfo::class.java)
+            } catch (e: Exception) {
+                throw SourceException(Errors.classify("Unable to parse video information"), e)
+            }
+            saveInfo(context, url, json)
 
             val duration = info.duration.takeIf { it > 0 }
             val raw = (info.formats ?: emptyList()).mapNotNull(::toRawFormat)
@@ -385,9 +419,22 @@ object YtDlpSource {
         // A direct URL from a custom resolver is handed to yt-dlp in place of the
         // page, so downloads keep the same progress, notifications and output
         // handling as every other site.
-        val target = option.directUrl ?: url
-        val request = YoutubeDLRequest(target).apply {
+        //
+        // Otherwise, start from the info resolve() saved. Extracting the page
+        // again was a second full yt-dlp run before the first byte. If the saved
+        // media URLs have expired, yt-dlp re-extracts from the page by itself —
+        // but only with --abort-on-error. By default the CLI swallows the failed
+        // download and that fallback never runs.
+        val savedInfo = if (option.directUrl == null) freshInfo(context, url) else null
+        val request = (
+            if (savedInfo != null) YoutubeDLRequest(emptyList())
+            else YoutubeDLRequest(option.directUrl ?: url)
+            ).apply {
             applyCommonOptions(context)
+            savedInfo?.let {
+                addOption("--load-info-json", it.absolutePath)
+                addOption("--abort-on-error")
+            }
             if (option.directUrl != null) {
                 HeaderBlob.decode(option.headerBlob).forEach { (key, value) ->
                     addOption("--add-header", "$key:$value")
@@ -426,6 +473,37 @@ object YtDlpSource {
         indexForGallery(context, finished)
         finished
     }
+
+    // ----------------------------------------------------------------------
+    // Saved info, so a download doesn't extract the page a second time
+    // ----------------------------------------------------------------------
+
+    private fun infoFile(context: Context, url: String): File {
+        val digest = MessageDigest.getInstance("SHA-256").digest(url.toByteArray())
+        val name = digest.joinToString("") { "%02x".format(it) }.take(32)
+        return File(File(context.cacheDir, INFO_SUBDIR), "$name.json")
+    }
+
+    private fun saveInfo(context: Context, url: String, json: String) {
+        val file = infoFile(context, url)
+        try {
+            val dir = file.parentFile ?: return
+            dir.mkdirs()
+            val now = System.currentTimeMillis()
+            dir.listFiles()
+                ?.filter { now - it.lastModified() > INFO_MAX_AGE_MS }
+                ?.forEach { it.delete() }
+            file.writeText(json)
+        } catch (e: Exception) {
+            // Only costs speed: download() falls back to extracting the page.
+            Log.w(TAG, "couldn't save info for $url", e)
+        }
+    }
+
+    private fun freshInfo(context: Context, url: String): File? =
+        infoFile(context, url).takeIf {
+            it.isFile && System.currentTimeMillis() - it.lastModified() < INFO_MAX_AGE_MS
+        }
 
     fun cancel(processId: String) {
         try {

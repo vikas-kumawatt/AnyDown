@@ -24,6 +24,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.LocalTextSelectionColors
 import androidx.compose.foundation.text.selection.TextSelectionColors
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -133,6 +134,7 @@ fun HomeScreen(
     onClearFinished: () -> Unit,
     onToggleAdvanced: () -> Unit,
     onProxyChange: (String) -> Unit,
+    onFindProxy: () -> Unit,
 ) {
     val busy = state.stage is DownloaderViewModel.Stage.Resolving
 
@@ -166,8 +168,11 @@ fun HomeScreen(
             AdvancedPanel(
                 open = state.advancedOpen,
                 proxy = state.proxy,
+                findingProxy = state.findingProxy,
+                proxyStatus = state.proxyStatus,
                 onToggle = onToggleAdvanced,
                 onProxyChange = onProxyChange,
+                onFindProxy = onFindProxy,
             )
 
             if (!state.engineReady) {
@@ -362,8 +367,11 @@ private fun UrlField(
 private fun AdvancedPanel(
     open: Boolean,
     proxy: String,
+    findingProxy: Boolean,
+    proxyStatus: String?,
     onToggle: () -> Unit,
     onProxyChange: (String) -> Unit,
+    onFindProxy: () -> Unit,
 ) {
     Column {
         Row(
@@ -396,7 +404,9 @@ private fun AdvancedPanel(
                 Spacer(Modifier.height(4.dp))
                 Text(
                     "For sites your network blocks outright. Accepts " +
-                        "socks5://host:port or http://host:port.",
+                        "socks5://host:port or http://host:port, or find a free " +
+                        "public one. Those are slower, and see which sites you " +
+                        "visit — not what you download.",
                     style = Type.small.copy(color = Palette.textTertiary),
                 )
                 Spacer(Modifier.height(12.dp))
@@ -439,6 +449,26 @@ private fun AdvancedPanel(
                         Spacer(Modifier.width(10.dp))
                         CloseButton(onClick = { onProxyChange("") })
                     }
+                }
+
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    GhostButton(
+                        label = if (findingProxy) "SEARCHING…" else "FIND A FREE PROXY",
+                        onClick = { if (!findingProxy) onFindProxy() },
+                    )
+                    if (findingProxy) {
+                        Spacer(Modifier.width(12.dp))
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp,
+                            color = Palette.textSecondary,
+                        )
+                    }
+                }
+                if (proxyStatus != null) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(proxyStatus, style = Type.small.copy(color = Palette.textTertiary))
                 }
             }
         }

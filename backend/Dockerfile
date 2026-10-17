@@ -19,7 +19,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 
-# Nothing is ever written to disk at runtime, so run unprivileged.
+# No media is ever written to disk at runtime (only yt-dlp's player-code cache
+# in /tmp), so run unprivileged.
 RUN useradd --create-home --uid 10001 appuser
 USER appuser
 

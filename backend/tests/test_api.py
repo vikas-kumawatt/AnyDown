@@ -219,3 +219,8 @@ def test_cors_allows_configured_origin_only(client: TestClient) -> None:
 def test_openapi_and_docs_are_disabled(client: TestClient) -> None:
     assert client.get("/docs").status_code == 404
     assert client.get("/openapi.json").status_code == 404
+
+
+def test_warm_up_runs_offline() -> None:
+    """Startup warm-up must never need the network, or a cold start could hang."""
+    extractor.warm_up()

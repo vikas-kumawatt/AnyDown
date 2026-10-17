@@ -6,12 +6,14 @@ module globals — where the app's own models aren't defined. The result is a
 pydantic body model being silently misread as a query parameter.
 """
 
+import asyncio
 import logging
 import shutil
 import subprocess
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import anyio
 import yt_dlp
 from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -30,6 +32,7 @@ from .extractor import (
     build_plans_from_direct,
     pick_fallback_plan,
     resolve,
+    warm_up,
 )
 from .platforms import MAX_URL_LENGTH, validate_source_url
 from .url_normalizer import normalize
@@ -95,7 +98,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         ffmpeg_version() or "missing",
         settings.max_height,
     )
+    # In the background, so the health check answers while it runs.
+    warming = asyncio.create_task(_warm_up())
     yield
+    warming.cancel()
+
+
+async def _warm_up() -> None:
+    try:
+        await anyio.to_thread.run_sync(warm_up)
+    except Exception:  # noqa: BLE001 - an optimisation must never stop startup
+        logger.warning("yt-dlp warm-up failed", exc_info=True)
 
 
 app = FastAPI(
