@@ -91,8 +91,12 @@ fi
 
 echo "==> Deploy credential for GitHub Actions (scoped to $RG only)"
 SCOPE="$(az group show --name "$RG" --query id --output tsv)"
+# One line with only the four fields azure/login reads. The full multi-line
+# block broke when copied out of Cloud Shell on a phone: the terminal's
+# wrapping came along as line breaks and the secret stopped being valid JSON.
 CREDS="$(az ad sp create-for-rbac --name "anydown-github-deploy" \
-  --role contributor --scopes "$SCOPE" --json-auth --only-show-errors)"
+  --role contributor --scopes "$SCOPE" --json-auth --only-show-errors \
+  | jq -c '{clientId, clientSecret, subscriptionId, tenantId}')"
 
 FQDN="$(az containerapp show --name "$APP" --resource-group "$RG" \
   --query properties.configuration.ingress.fqdn --output tsv)"
@@ -103,7 +107,7 @@ cat <<DONE
 Done. Backend URL: https://$FQDN
 
 1) GitHub -> AnyDown -> Settings -> Secrets and variables -> Actions
-   New repository secret  AZURE_CREDENTIALS  = everything between the lines:
+   New repository secret  AZURE_CREDENTIALS  = the one line between the dashes:
 --------------------------------------------------------------------------
 $CREDS
 --------------------------------------------------------------------------
