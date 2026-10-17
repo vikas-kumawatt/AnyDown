@@ -73,7 +73,53 @@ automatically if ffmpeg isn't installed.
 
 ## Deploying
 
-### Backend on Render
+Frontend on Netlify, backend on Azure Container Apps. Set up once in this
+order; after that, every push to `main` redeploys whatever changed.
+
+### 1. Frontend on Netlify
+
+1. **Add new site → Import an existing project → GitHub**, pick this repo.
+2. Set **Base directory** to `frontend`. `frontend/netlify.toml` supplies the
+   build command and publish directory.
+3. Deploy, and note the site URL (e.g. `https://your-app.netlify.app`).
+
+### 2. Backend on Azure Container Apps
+
+1. Open [Azure Cloud Shell](https://shell.azure.com) (Bash) and run, with your
+   Netlify URL:
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/vikas-kumawatt/AnyDown/main/deploy/azure-setup.sh \
+     | bash -s -- https://your-app.netlify.app
+   ```
+
+   It creates the `anydown` resource group and a Container App that scales to
+   zero (0.5 vCPU / 1 GiB, one replica at most), and prints two things.
+2. Add the printed JSON as the GitHub secret **`AZURE_CREDENTIALS`**.
+3. **Actions → Backend → Azure → Run workflow.** The first run builds the image
+   and then stops, asking you to make the `anydown-api` package public: Azure
+   pulls it anonymously. Do that once (the error links to the setting), then
+   re-run.
+4. In Netlify, set **`VITE_API_BASE`** and **`VITE_APP_KEY`** to the printed
+   values, then **Deploys → Trigger deploy**.
+
+The app key stops casual use of the API by anyone who finds its URL. It isn't
+a secret from visitors to the site, which has to send it.
+
+Cost: the Container Apps free grant (180,000 vCPU-seconds a month) covers
+personal use, and scaled to zero it bills nothing while idle, at the price of a
+few seconds' cold start on the first request. Downloads are proxied through the
+server, so their bandwidth counts as Azure egress.
+
+Docker is used rather than a native Python runtime because those ship no
+ffmpeg — merged 1080p downloads would silently fall back to 360p/720p forever.
+For the same reason, App Service's free tier, which can't run custom
+containers, isn't an option.
+
+<details>
+<summary>Other hosts</summary>
+
+#### Render (the previous host)
 
 1. Push this repo to GitHub.
 2. In Render: **New → Blueprint**, point it at the repo. `render.yaml` defines
@@ -107,13 +153,7 @@ This depends on a third-party download staying available at build time, which
 is why it isn't the default.
 </details>
 
-### Frontend on Netlify
-
-1. **Add new site → Import from Git**, same repo. `netlify.toml` sets base
-   directory, build command and publish path.
-2. Set `VITE_API_BASE` to your Render URL in **Site settings → Environment
-   variables**.
-3. Redeploy.
+</details>
 
 `robots.txt` and an `X-Robots-Tag` header keep the site out of search indexes.
 Bookmark the URL and don't share it.

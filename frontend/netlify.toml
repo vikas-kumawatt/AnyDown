@@ -1,7 +1,9 @@
+# Set the site's Base directory to `frontend` in Netlify's UI; this file lives
+# there, and `publish` is relative to it. (It used to repeat `base` and point at
+# frontend/dist, which Netlify resolves to frontend/frontend/dist.)
 [build]
-  base = "frontend"
   command = "npm ci && npm run build"
-  publish = "frontend/dist"
+  publish = "dist"
 
 [build.environment]
   NODE_VERSION = "20"
