@@ -76,6 +76,31 @@ object Http {
 
     data class Response(val body: String, val finalUrl: String, val cookies: String?)
 
+    /**
+     * The app's proxy setting as a [java.net.Proxy], or null for none or an
+     * unusable value. Shared by the custom resolvers and the proxy finder, so
+     * the same text means the same thing everywhere.
+     */
+    fun proxyOf(proxyUrl: String): java.net.Proxy? {
+        if (proxyUrl.isBlank()) return null
+        return try {
+            val withScheme =
+                if ("://" in proxyUrl) proxyUrl else "http://$proxyUrl"
+            val uri = java.net.URI(withScheme)
+            val host = uri.host ?: return null
+            val port = if (uri.port > 0) uri.port else 8080
+            val type = if (uri.scheme?.startsWith("socks", true) == true) {
+                java.net.Proxy.Type.SOCKS
+            } else {
+                java.net.Proxy.Type.HTTP
+            }
+            java.net.Proxy(type, java.net.InetSocketAddress(host, port))
+        } catch (e: Exception) {
+            Log.w(TAG, "unusable proxy: $proxyUrl", e)
+            null
+        }
+    }
+
     private fun open(
         url: String,
         headers: Map<String, String>,

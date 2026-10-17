@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.anydown.downloader.data.ProxyFinder
 import com.anydown.downloader.data.YtDlpSource
 import com.anydown.downloader.domain.Errors
 import com.anydown.downloader.domain.FormatPlanner
@@ -39,6 +40,10 @@ class DownloaderViewModel(application: Application) : AndroidViewModel(applicati
         /** Optional proxy for sites blocked at the network level. */
         val proxy: String = "",
         val advancedOpen: Boolean = false,
+        /** True while ProxyFinder is testing candidates. */
+        val findingProxy: Boolean = false,
+        /** Outcome of the last proxy search, shown under the proxy field. */
+        val proxyStatus: String? = null,
     )
 
     private val prefs = application.getSharedPreferences("anydown", Context.MODE_PRIVATE)
@@ -137,7 +142,39 @@ class DownloaderViewModel(application: Application) : AndroidViewModel(applicati
     /** Persisted immediately so it survives the app being killed mid-edit. */
     fun onProxyChange(proxy: String) {
         YtDlpSource.setProxy(getApplication(), proxy)
-        _state.update { it.copy(proxy = proxy) }
+        _state.update { it.copy(proxy = proxy, proxyStatus = null) }
+    }
+
+    /**
+     * Fills the proxy field with a free public proxy that can reach the site in
+     * the link field right now (or the internet at large, if it's empty).
+     */
+    fun findProxy() {
+        if (_state.value.findingProxy) return
+        viewModelScope.launch {
+            _state.update {
+                it.copy(findingProxy = true, proxyStatus = "Testing public proxies…")
+            }
+            runCatching { ProxyFinder.find(_state.value.url) }
+                .onSuccess { found ->
+                    onProxyChange(found.proxy)
+                    _state.update {
+                        it.copy(
+                            findingProxy = false,
+                            proxyStatus = "Found one that answered in ${found.latencyMs} ms.",
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    if (error is CancellationException) throw error
+                    _state.update {
+                        it.copy(
+                            findingProxy = false,
+                            proxyStatus = error.message ?: "Couldn't find a working proxy.",
+                        )
+                    }
+                }
+        }
     }
 
     fun clearFinishedJobs() = DownloadBus.clearFinished()

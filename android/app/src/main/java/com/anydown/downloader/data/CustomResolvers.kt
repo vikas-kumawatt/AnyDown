@@ -2,9 +2,9 @@ package com.anydown.downloader.data
 
 import android.util.Log
 import com.anydown.downloader.domain.DirectResult
+import com.anydown.downloader.domain.RedditParser
 import com.anydown.downloader.domain.TeraboxParser
 import com.anydown.downloader.domain.ThreadsParser
-import java.net.InetSocketAddress
 import java.net.Proxy
 
 /**
@@ -21,14 +21,16 @@ object CustomResolvers {
 
     private const val TAG = "CustomResolvers"
 
-    fun handles(url: String): Boolean = isThreads(url) || TeraboxParser.handles(url)
+    fun handles(url: String): Boolean =
+        isThreads(url) || TeraboxParser.handles(url) || RedditParser.handles(url)
 
     /** Null means "not mine, or I couldn't do it" — the caller then tries yt-dlp. */
     fun resolve(url: String, proxyUrl: String): DirectResult? = try {
-        val proxy = parseProxy(proxyUrl)
+        val proxy = Http.proxyOf(proxyUrl)
         when {
             isThreads(url) -> resolveThreads(url, proxy)
             TeraboxParser.handles(url) -> resolveTerabox(url, proxy)
+            RedditParser.handles(url) -> resolveReddit(url, proxy)
             else -> null
         }
     } catch (e: Exception) {
@@ -94,27 +96,43 @@ object CustomResolvers {
     }
 
     // ----------------------------------------------------------------------
+    // Reddit
+    // ----------------------------------------------------------------------
 
-    /** Reuses the app's proxy setting, so blocked networks work here too. */
-    private fun parseProxy(proxyUrl: String): Proxy? {
-        if (proxyUrl.isBlank()) return null
-        return try {
-            val withScheme =
-                if ("://" in proxyUrl) proxyUrl else "http://$proxyUrl"
-            val uri = java.net.URI(withScheme)
-            val host = uri.host ?: return null
-            val port = if (uri.port > 0) uri.port else 8080
-            val type = if (uri.scheme?.startsWith("socks", true) == true) {
-                Proxy.Type.SOCKS
-            } else {
-                Proxy.Type.HTTP
-            }
-            Proxy(type, InetSocketAddress(host, port))
-        } catch (e: Exception) {
-            Log.w(TAG, "unusable proxy: $proxyUrl", e)
-            null
+    private val BROWSER_PAGE = mapOf(
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Sec-Fetch-Mode" to "navigate",
+    )
+
+    private fun resolveReddit(url: String, proxy: Proxy?): DirectResult? {
+        // Share links (`/r/<sub>/s/<code>`) only become a post URL by following
+        // them. The page they land on is kept: it's the fallback source below.
+        var postUrl = url
+        var page: String? = null
+        if (RedditParser.postId(url) == null) {
+            val landed = Http.getText(url, headers = BROWSER_PAGE, proxy = proxy)
+            postUrl = landed.finalUrl
+            page = landed.body
         }
+
+        RedditParser.postId(postUrl)?.let { id ->
+            runCatching {
+                Http.getText(
+                    RedditParser.jsonUrl(id),
+                    headers = mapOf("Accept" to "application/json"),
+                    proxy = proxy,
+                )
+            }.getOrNull()?.let { RedditParser.parseJson(it.body) }?.let {
+                Log.i(TAG, "reddit: media found via json")
+                return it
+            }
+        }
+
+        val html = page ?: Http.getText(postUrl, headers = BROWSER_PAGE, proxy = proxy).body
+        return RedditParser.parseHtml(html)?.also { Log.i(TAG, "reddit: media found via page") }
     }
+
+    // ----------------------------------------------------------------------
 
     private fun hostOf(url: String): String? {
         val match = Regex("^(https?)://([^/?#\\s]+)", RegexOption.IGNORE_CASE).find(url.trim())
