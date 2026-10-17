@@ -77,6 +77,33 @@ object Http {
     data class Response(val body: String, val finalUrl: String, val cookies: String?)
 
     /**
+     * Where [url] redirects to, without fetching the destination.
+     *
+     * For share links whose landing page may itself be blocked: the redirect
+     * still names the real post, and that's all the caller needs.
+     */
+    fun finalUrl(
+        url: String,
+        headers: Map<String, String> = emptyMap(),
+        cookies: String? = null,
+        proxy: java.net.Proxy? = null,
+    ): String {
+        var current = url
+        repeat(6) {
+            val connection = open(current, headers, cookies, proxy)
+            try {
+                val code = connection.responseCode
+                if (code !in 300..399) return current
+                val location = connection.getHeaderField("Location") ?: return current
+                current = URL(URL(current), location).toString()
+            } finally {
+                connection.disconnect()
+            }
+        }
+        return current
+    }
+
+    /**
      * The app's proxy setting as a [java.net.Proxy], or null for none or an
      * unusable value. Shared by the custom resolvers and the proxy finder, so
      * the same text means the same thing everywhere.

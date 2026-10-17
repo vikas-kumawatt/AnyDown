@@ -97,7 +97,12 @@ object YtDlpSource {
         addOption("--no-warnings")
         // Cheap to ask for, and gets past some region locks on its own.
         addOption("--geo-bypass")
-        getProxy(context).takeIf { it.isNotBlank() }?.let { addOption("--proxy", it) }
+        getProxy(context).takeIf { it.isNotBlank() }?.let {
+            addOption("--proxy", it)
+            // Free proxies are slow to start answering; yt-dlp's 20 s default
+            // gave up on ones that would have worked.
+            addOption("--socket-timeout", "45")
+        }
     }
 
     class SourceException(
@@ -273,8 +278,9 @@ object YtDlpSource {
 
             // Sites yt-dlp has no extractor for get resolved by hand first.
             // Returning null falls through, so this can only ever help.
+            val resolverTrace = mutableListOf<String>()
             if (CustomResolvers.handles(url)) {
-                CustomResolvers.resolve(url, getProxy(context))?.let { direct ->
+                CustomResolvers.resolve(url, getProxy(context), resolverTrace)?.let { direct ->
                     return@withContext Resolved(
                         title = direct.title,
                         thumbnail = direct.thumbnail,
@@ -296,7 +302,14 @@ object YtDlpSource {
             val json = try {
                 YoutubeDL.getInstance().execute(request, null, null).out
             } catch (e: Exception) {
-                throw SourceException(Errors.classify(e.message), e)
+                val classified = Errors.classify(e.message)
+                // When the built-in resolver tried first, its reasons matter more
+                // than yt-dlp's: yt-dlp is only the fallback for these sites.
+                val detail = if (resolverTrace.isEmpty()) classified.detail else listOfNotNull(
+                    "Built-in resolver:\n" + resolverTrace.joinToString("\n") { "• $it" },
+                    classified.detail?.let { "yt-dlp:\n$it" },
+                ).joinToString("\n\n")
+                throw SourceException(classified.copy(detail = detail), e)
             }
             val info: VideoInfo = try {
                 YoutubeDL.objectMapper.readValue(json, VideoInfo::class.java)

@@ -48,7 +48,11 @@ object RedditParser {
     fun postId(url: String): String? = POST_ID.find(url)?.groupValues?.get(1)
 
     /** `raw_json=1` keeps URLs as written rather than HTML-escaped (`&amp;`). */
-    fun jsonUrl(postId: String): String = "https://www.reddit.com/comments/$postId/.json?raw_json=1"
+    fun jsonUrl(postId: String, host: String = "www.reddit.com"): String =
+        "https://$host/comments/$postId/.json?raw_json=1"
+
+    /** The post page, which redirects to its full `/r/<sub>/comments/<id>/<slug>/` form. */
+    fun pageUrl(postId: String, host: String): String = "https://$host/comments/$postId/"
 
     /** Reads the post listing from [jsonUrl]. Null when it isn't JSON or has no media. */
     fun parseJson(body: String): DirectResult? {
@@ -81,7 +85,10 @@ object RedditParser {
         )
     }
 
-    /** Fallback when the JSON is blocked too: the player embeds the same manifests. */
+    /**
+     * Fallback when the JSON is blocked too: the player embeds the same
+     * manifests — as `src` on new Reddit, `data-hls-url` on old Reddit.
+     */
     fun parseHtml(html: String): DirectResult? {
         val text = decodeEntities(JsonLite.unescape(html))
         val manifest = HLS.find(text)?.value

@@ -24,17 +24,28 @@ object CustomResolvers {
     fun handles(url: String): Boolean =
         isThreads(url) || TeraboxParser.handles(url) || RedditParser.handles(url)
 
-    /** Null means "not mine, or I couldn't do it" — the caller then tries yt-dlp. */
-    fun resolve(url: String, proxyUrl: String): DirectResult? = try {
+    /**
+     * Null means "not mine, or I couldn't do it" — the caller then tries yt-dlp.
+     *
+     * [trace] collects why each step failed. A resolver failing silently and
+     * yt-dlp then failing in its own words hid the real cause; the caller adds
+     * these lines to the error details instead.
+     */
+    fun resolve(
+        url: String,
+        proxyUrl: String,
+        trace: MutableList<String> = mutableListOf(),
+    ): DirectResult? = try {
         val proxy = Http.proxyOf(proxyUrl)
         when {
             isThreads(url) -> resolveThreads(url, proxy)
             TeraboxParser.handles(url) -> resolveTerabox(url, proxy)
-            RedditParser.handles(url) -> resolveReddit(url, proxy)
+            RedditParser.handles(url) -> resolveReddit(url, proxy, trace)
             else -> null
         }
     } catch (e: Exception) {
         Log.w(TAG, "custom resolve failed for $url", e)
+        trace += "${e.javaClass.simpleName}: ${e.message}"
         null
     }
 
@@ -104,33 +115,73 @@ object CustomResolvers {
         "Sec-Fetch-Mode" to "navigate",
     )
 
-    private fun resolveReddit(url: String, proxy: Proxy?): DirectResult? {
-        // Share links (`/r/<sub>/s/<code>`) only become a post URL by following
-        // them. The page they land on is kept: it's the fallback source below.
-        var postUrl = url
-        var page: String? = null
-        if (RedditParser.postId(url) == null) {
-            val landed = Http.getText(url, headers = BROWSER_PAGE, proxy = proxy)
-            postUrl = landed.finalUrl
-            page = landed.body
+    /**
+     * Mirrors the steps yt-dlp's own Reddit extractor takes, over Android's
+     * network stack, which Reddit doesn't block the way it blocks yt-dlp's.
+     */
+    private fun resolveReddit(url: String, proxy: Proxy?, trace: MutableList<String>): DirectResult? {
+        // Reddit's JSON only answers anonymous callers holding the `loid`
+        // session cookie, which old.reddit.com hands out. over18 opts in to
+        // NSFW posts, as yt-dlp does.
+        val session = step(trace, "session") {
+            Http.getText("https://old.reddit.com/", headers = BROWSER_PAGE, proxy = proxy).cookies
+        }
+        val cookies = listOfNotNull(session, "over18=1").joinToString("; ")
+
+        // Share links (`/r/<sub>/s/<code>`) name the post only in their redirect.
+        val postUrl = if (RedditParser.postId(url) != null) url else {
+            step(trace, "share link") {
+                Http.finalUrl(url, headers = BROWSER_PAGE, cookies = cookies, proxy = proxy)
+            } ?: url
+        }
+        val id = RedditParser.postId(postUrl) ?: run {
+            trace += "no post id in $postUrl"
+            return null
         }
 
-        RedditParser.postId(postUrl)?.let { id ->
-            runCatching {
-                Http.getText(
-                    RedditParser.jsonUrl(id),
+        for (host in listOf("www.reddit.com", "old.reddit.com")) {
+            step(trace, "$host json") {
+                val body = Http.getText(
+                    RedditParser.jsonUrl(id, host),
                     headers = mapOf("Accept" to "application/json"),
+                    cookies = cookies,
                     proxy = proxy,
+                ).body
+                RedditParser.parseJson(body) ?: error(
+                    if (body.trimStart().startsWith("<")) "got a web page, not JSON"
+                    else "no video or image in the post"
                 )
-            }.getOrNull()?.let { RedditParser.parseJson(it.body) }?.let {
-                Log.i(TAG, "reddit: media found via json")
+            }?.let {
+                Log.i(TAG, "reddit: media found via $host json")
                 return it
             }
         }
 
-        val html = page ?: Http.getText(postUrl, headers = BROWSER_PAGE, proxy = proxy).body
-        return RedditParser.parseHtml(html)?.also { Log.i(TAG, "reddit: media found via page") }
+        for (host in listOf("old.reddit.com", "www.reddit.com")) {
+            step(trace, "$host page") {
+                val html = Http.getText(
+                    RedditParser.pageUrl(id, host),
+                    headers = BROWSER_PAGE,
+                    cookies = cookies,
+                    proxy = proxy,
+                ).body
+                RedditParser.parseHtml(html) ?: error("no video player in the page")
+            }?.let {
+                Log.i(TAG, "reddit: media found via $host page")
+                return it
+            }
+        }
+        return null
     }
+
+    /** Runs one resolver step; a failure is recorded in [trace] instead of thrown. */
+    private inline fun <T> step(trace: MutableList<String>, name: String, block: () -> T): T? =
+        try {
+            block()
+        } catch (e: Exception) {
+            trace += "$name: ${e.message ?: e.javaClass.simpleName}"
+            null
+        }
 
     // ----------------------------------------------------------------------
 

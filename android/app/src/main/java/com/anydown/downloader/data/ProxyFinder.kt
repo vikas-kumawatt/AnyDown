@@ -45,6 +45,11 @@ object ProxyFinder {
     private const val MAX_CANDIDATES = 80
     private const val PARALLEL = 24
     private const val PROBE_TIMEOUT_MS = 5_000
+    /**
+     * A probe reads this much of the page, not just the status line: plenty of
+     * free proxies answer the handshake quickly and then stall on real data.
+     */
+    private const val PROBE_BODY_BYTES = 64 * 1024
     private const val SEARCH_DEADLINE_MS = 25_000L
     /** Stop once this many work: the fastest of a few beats waiting for all. */
     private const val ENOUGH = 3
@@ -107,9 +112,20 @@ object ProxyFinder {
                 connection.instanceFollowRedirects = false
                 connection.setRequestProperty("User-Agent", Http.BROWSER_UA)
                 val code = connection.responseCode
+                if (code !in 200..399) return null
                 // A redirect still proves the tunnel reached the real site.
-                if (code in 200..399) Found(proxyUrl, (System.nanoTime() - started) / 1_000_000)
-                else null
+                if (code in 200..299) {
+                    connection.inputStream.use { input ->
+                        val buffer = ByteArray(16 * 1024)
+                        var total = 0
+                        while (total < PROBE_BODY_BYTES) {
+                            val read = input.read(buffer)
+                            if (read <= 0) break
+                            total += read
+                        }
+                    }
+                }
+                Found(proxyUrl, (System.nanoTime() - started) / 1_000_000)
             } finally {
                 connection.disconnect()
             }

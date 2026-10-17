@@ -82,7 +82,7 @@ class RedditParserTest {
     }
 
     @Test
-    fun `html fallback reads the player's manifest and decodes entities`() {
+    fun `html fallback reads the player manifest and decodes entities`() {
         val html = """
             <html><head><meta property="og:title" content="Samay&#39;s best roast" />
             <meta property="og:image" content="https://external-preview.redd.it/p.jpg" /></head>
@@ -93,6 +93,25 @@ class RedditParserTest {
 
         assertEquals("Samay's best roast", result.title)
         assertEquals("https://v.redd.it/abc123xyz/HLSPlaylist.m3u8?a=SIGNED&v=1&f=sd", result.media[0].url)
+    }
+
+    @Test
+    fun `old reddit player attributes are read too`() {
+        val html = """
+            <div class="reddit-video-player-root" data-seek-preview-url="https://v.redd.it/abc123xyz/DASH_96.mp4"
+              data-hls-url="https://v.redd.it/abc123xyz/HLSPlaylist.m3u8?a=SIGNED&amp;v=1&amp;f=sd"
+              data-mpd-url="https://v.redd.it/abc123xyz/DASHPlaylist.mpd?a=SIGNED&amp;v=1&amp;f=sd"></div>
+        """.trimIndent()
+        val result = RedditParser.parseHtml(html)!!
+        assertEquals("https://v.redd.it/abc123xyz/HLSPlaylist.m3u8?a=SIGNED&v=1&f=sd", result.media[0].url)
+    }
+
+    @Test
+    fun `json can come from either front-end`() {
+        assertEquals(
+            "https://old.reddit.com/comments/1x5ylwl/.json?raw_json=1",
+            RedditParser.jsonUrl("1x5ylwl", "old.reddit.com"),
+        )
     }
 
     @Test
