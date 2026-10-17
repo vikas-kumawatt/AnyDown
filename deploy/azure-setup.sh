@@ -16,7 +16,10 @@ set -euo pipefail
 
 FRONTEND_URL="${1:?Pass your Netlify site URL, e.g. https://anydown.netlify.app}"
 FRONTEND_URL="${FRONTEND_URL%/}"
-LOCATION="${LOCATION:-centralindia}"
+# Free and student subscriptions may only deploy to a short, per-subscription
+# list of regions, and Azure doesn't say which. Unless LOCATION is set, these
+# are tried in order, nearest to India first, until one is allowed.
+REGIONS="${LOCATION:-centralindia southindia southeastasia eastasia uaenorth koreacentral japaneast westeurope northeurope swedencentral eastus eastus2 westus2 westus3 canadacentral}"
 RG="anydown"
 ENV_NAME="anydown-env"
 APP="anydown-api"
@@ -26,16 +29,36 @@ az extension add --name containerapp --upgrade --only-show-errors
 az provider register --namespace Microsoft.App --wait
 az provider register --namespace Microsoft.OperationalInsights --wait
 
-echo "==> Resource group $RG in $LOCATION"
-az group create --name "$RG" --location "$LOCATION" --output none
-
 echo "==> Container Apps environment"
 # No Log Analytics workspace: it bills per GB of logs. Live logs still work:
 #   az containerapp logs show -n anydown-api -g anydown --follow
-if ! az containerapp env show --name "$ENV_NAME" --resource-group "$RG" --output none 2>/dev/null; then
-  az containerapp env create --name "$ENV_NAME" --resource-group "$RG" \
-    --location "$LOCATION" --logs-destination none --output none
+if az group show --name "$RG" --output none 2>/dev/null \
+  && az containerapp env show --name "$ENV_NAME" --resource-group "$RG" --output none 2>/dev/null; then
+  LOCATION="$(az containerapp env show --name "$ENV_NAME" --resource-group "$RG" --query location --output tsv)"
+else
+  LOCATION=""
+  for region in $REGIONS; do
+    echo "    trying $region"
+    # The group only holds metadata, so it stays wherever it was first made.
+    az group show --name "$RG" --output none 2>/dev/null \
+      || az group create --name "$RG" --location "$region" --output none
+    if az containerapp env create --name "$ENV_NAME" --resource-group "$RG" \
+      --location "$region" --logs-destination none --output none 2>/tmp/anydown-env.err; then
+      LOCATION="$region"
+      break
+    fi
+    if ! grep -q "RequestDisallowedByAzure\|not available\|NoRegisteredProviderFound\|LocationNotAvailable" /tmp/anydown-env.err; then
+      cat /tmp/anydown-env.err >&2
+      exit 1
+    fi
+  done
+  if [ -z "$LOCATION" ]; then
+    echo "None of these regions is allowed for this subscription: $REGIONS" >&2
+    echo "Find yours under Azure Policy -> Assignments, then re-run with LOCATION=<region>." >&2
+    exit 1
+  fi
 fi
+echo "    using $LOCATION"
 
 APP_KEY="$(openssl rand -hex 24)"
 SETTINGS=(
