@@ -15,5 +15,14 @@
     @com.fasterxml.jackson.annotation.* <fields>;
     @com.fasterxml.jackson.annotation.* <methods>;
 }
--keepnames class com.fasterxml.jackson.** { *; }
+-keep class com.fasterxml.jackson.** { *; }
 -dontwarn com.fasterxml.jackson.databind.**
+
+# youtubedl-android unpacks its bundled Python with commons-compress, which
+# creates its zip extra-field handlers by reflection. Shrunk, the first launch
+# of a release build died in that unpacking with only an obfuscated class name
+# ("Q2.e") for an error. commons-io is used alongside it.
+-keep class org.apache.commons.compress.** { *; }
+-keep class org.apache.commons.io.** { *; }
+-dontwarn org.apache.commons.compress.**
+-dontwarn org.apache.commons.io.**
