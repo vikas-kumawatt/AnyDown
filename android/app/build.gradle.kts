@@ -159,6 +159,10 @@ dependencies {
     // Without this, yt-dlp can't merge separate video+audio streams, which caps
     // most platforms at roughly 720p.
     implementation(libs.youtubedl.ffmpeg)
+    // youtubedl-android already bundles Jackson but only exposes it at runtime.
+    // YtDlpSource parses yt-dlp's JSON with the library's own ObjectMapper, so
+    // the type has to be visible at compile time too. Adds nothing to the APK.
+    compileOnly(libs.jackson.databind)
 
     testImplementation(libs.junit)
 }
