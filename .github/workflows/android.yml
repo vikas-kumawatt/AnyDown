@@ -69,9 +69,45 @@ jobs:
           path: android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
+      # Release builds are minified and signed with your own key, so each one
+      # installs as an update over the last. The key comes from four repository
+      # secrets (see android/README.md). A version tag without them fails
+      # loudly; a manual run without them just skips the release build.
+      - name: Decode signing key
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+              echo "::error::ANDROID_KEYSTORE_BASE64 isn't set, so the release APK can't be signed. See android/README.md."
+              exit 1
+            fi
+            echo "::notice::No signing key in secrets; skipping the release build."
+            exit 0
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+
+      - name: Assemble release APK
+        if: env.ANDROID_KEYSTORE_PATH != ''
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: gradle :app:assembleRelease --no-daemon
+
+      - name: Upload release APKs
+        if: env.ANDROID_KEYSTORE_PATH != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: anydown-release-apk
+          path: android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+
       - name: Attach APKs to release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: android/app/build/outputs/apk/debug/*.apk
+          files: android/app/build/outputs/apk/release/*.apk
           generate_release_notes: true

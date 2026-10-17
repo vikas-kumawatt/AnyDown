@@ -75,8 +75,8 @@ android {
         // git tag minus its "v". versionCode must only ever increase — Android
         // refuses to install an APK whose versionCode is lower than the one
         // already on the device.
-        versionCode = 6
-        versionName = "1.5.1"
+        versionCode = 7
+        versionName = "1.6.0"
 
         // youtubedl-android ships a Python runtime and yt-dlp/ffmpeg binaries per
         // ABI. Every ABI you keep is roughly another 25-35 MB of APK. arm64-v8a
@@ -88,6 +88,20 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            // Supplied by the CI workflow from repository secrets. To sign a
+            // release locally, export the same four variables. Without them the
+            // release build is produced unsigned, which Android won't install.
+            System.getenv("ANDROID_KEYSTORE_PATH")?.let { path ->
+                storeFile = file(path)
+                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         debug {
             // The CI workflow builds this variant; it's signed with the
@@ -95,6 +109,8 @@ android {
             isMinifyEnabled = false
         }
         release {
+            signingConfigs.getByName("release").takeIf { it.storeFile != null }
+                ?.let { signingConfig = it }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(

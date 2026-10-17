@@ -26,8 +26,38 @@ The GitHub Actions workflow builds it, so you never need Android Studio.
 4. Copy it to the phone and open it. Android will ask you to allow installs from
    that source.
 
-Pushing a `v*` tag also attaches the APKs to a GitHub Release, which is a
-friendlier download link on a phone.
+Pushing a `v*` tag builds the **release** APKs — minified, and signed with
+your own key — and attaches them to a GitHub Release, which is a friendlier
+download link on a phone. Install those for everyday use. The debug APKs are
+signed with a throwaway key, so Android won't install a release build over a
+debug one (or the reverse): uninstall first when switching.
+
+<details>
+<summary>Release signing setup (once)</summary>
+
+The release build reads its key from four repository secrets
+(**Settings → Secrets and variables → Actions → New repository secret**):
+
+| Secret | Value |
+|---|---|
+| `ANDROID_KEYSTORE_BASE64` | the keystore file, base64-encoded |
+| `ANDROID_KEYSTORE_PASSWORD` | the keystore's password |
+| `ANDROID_KEY_ALIAS` | the key's alias |
+| `ANDROID_KEY_PASSWORD` | the key's password |
+
+Create a key with:
+
+```bash
+keytool -genkeypair -v -keystore anydown-release.jks -alias anydown \
+  -keyalg RSA -keysize 4096 -validity 10000
+base64 -w0 anydown-release.jks   # the ANDROID_KEYSTORE_BASE64 value
+```
+
+**Back the keystore and passwords up somewhere safe.** Every future update
+must be signed with the same key; lose it and the next release can only be
+installed after uninstalling the app.
+
+</details>
 
 <details>
 <summary>Building locally instead</summary>
