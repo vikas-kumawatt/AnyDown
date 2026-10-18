@@ -27,7 +27,7 @@ from yt_dlp.utils import DownloadError, ExtractorError, UnsupportedError
 
 from .cache import TTLCache
 from .config import get_settings
-from .errors import AppError, ErrorCode, classify_extractor_error
+from .errors import AppError, ErrorCode, classify_extractor_error, clean_detail
 from .resolvers import DirectResult
 
 logger = logging.getLogger(__name__)
@@ -218,7 +218,7 @@ async def resolve(url: str, *, use_cache: bool = True) -> dict[str, Any]:
         code, message = classify_extractor_error(str(exc))
         logger.warning("extraction failed url=%s error=%s", url, exc)
         status = 404 if code is ErrorCode.PRIVATE_CONTENT else 422
-        raise AppError(code, message, status_code=status) from exc
+        raise AppError(code, message, status_code=status, detail=clean_detail(str(exc))) from exc
     except Exception as exc:  # noqa: BLE001 - yt-dlp raises bare exceptions too
         logger.exception("unexpected extraction error url=%s", url)
         raise AppError(

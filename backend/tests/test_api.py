@@ -246,3 +246,22 @@ def test_rejected_app_key_still_carries_cors_headers(
     assert response.status_code == 401
     assert response.json()["error"] == "UNAUTHORIZED"
     assert response.headers.get("access-control-allow-origin") == "http://testserver"
+
+
+def test_extraction_errors_carry_ytdlps_own_words(
+    client: TestClient, monkeypatch
+) -> None:
+    """The friendly line can be wrong; "Show details" must show the real one."""
+    from yt_dlp.utils import DownloadError
+
+    raw = "ERROR: [youtube] abc123: Sign in to confirm you’re not a bot."
+
+    def blocked(url: str) -> dict:
+        raise DownloadError(raw)
+
+    monkeypatch.setattr(extractor, "_extract_sync", blocked)
+    response = client.post("/api/resolve", json={"url": YT_URL})
+
+    body = response.json()
+    assert body["error"] == "BLOCKED"
+    assert body["detail"] == raw

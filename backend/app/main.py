@@ -160,16 +160,18 @@ app.add_middleware(
 # --------------------------------------------------------------------------
 
 
-def error_response(code: ErrorCode, message: str, status_code: int) -> JSONResponse:
+def error_response(
+    code: ErrorCode, message: str, status_code: int, detail: str | None = None
+) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
-        content=ErrorResponse(error=str(code), message=message).model_dump(),
+        content=ErrorResponse(error=str(code), message=message, detail=detail).model_dump(),
     )
 
 
 @app.exception_handler(AppError)
 async def handle_app_error(request: Request, exc: AppError) -> JSONResponse:
-    return error_response(exc.code, exc.message, exc.status_code)
+    return error_response(exc.code, exc.message, exc.status_code, exc.detail)
 
 
 @app.exception_handler(RateLimitExceeded)
