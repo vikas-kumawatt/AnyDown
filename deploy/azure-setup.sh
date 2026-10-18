@@ -10,8 +10,8 @@
 # It creates a resource group, a Container Apps environment and an app that
 # scales to zero, then prints the two values to paste into GitHub and Netlify.
 # After that, every push to main that touches backend/ deploys automatically
-# (.github/workflows/backend-azure.yml). Safe to re-run: existing resources
-# are reused, but the app key and the deploy credential are regenerated.
+# (.github/workflows/backend-azure.yml). Safe to re-run: existing resources,
+# the app key and the deploy identity are all reused.
 set -euo pipefail
 
 FRONTEND_URL="${1:?Pass your Netlify site URL, e.g. https://anydown.netlify.app}"
@@ -23,6 +23,7 @@ REGIONS="${LOCATION:-centralindia southindia southeastasia eastasia uaenorth kor
 RG="anydown"
 ENV_NAME="anydown-env"
 APP="anydown-api"
+GITHUB_REPO="${GITHUB_REPO:-vikas-kumawatt/AnyDown}"
 
 echo "==> Preparing the az CLI"
 az extension add --name containerapp --upgrade --only-show-errors
@@ -60,7 +61,6 @@ else
 fi
 echo "    using $LOCATION"
 
-APP_KEY="$(openssl rand -hex 24)"
 SETTINGS=(
   "APP_APP_KEY=secretref:app-key"
   "APP_CORS_ORIGINS=$FRONTEND_URL"
@@ -71,11 +71,13 @@ SETTINGS=(
 
 echo "==> Container app $APP"
 if az containerapp show --name "$APP" --resource-group "$RG" --output none 2>/dev/null; then
-  az containerapp secret set --name "$APP" --resource-group "$RG" \
-    --secrets "app-key=$APP_KEY" --output none
+  # Keep the existing app key: Netlify already has it.
+  APP_KEY="$(az containerapp secret show --name "$APP" --resource-group "$RG" \
+    --secret-name app-key --query value --output tsv)"
   az containerapp update --name "$APP" --resource-group "$RG" \
     --set-env-vars "${SETTINGS[@]}" --output none
 else
+  APP_KEY="$(openssl rand -hex 24)"
   # A placeholder image until the first GitHub deploy replaces it. One
   # replica at most: download slots and caches live in the process.
   az containerapp create --name "$APP" --resource-group "$RG" \
@@ -89,14 +91,41 @@ else
     --output none
 fi
 
-echo "==> Deploy credential for GitHub Actions (scoped to $RG only)"
+# GitHub signs in with OIDC: Azure trusts tokens GitHub issues for this
+# repository's main branch, so there's no password to store or copy. (A
+# client secret copied out of Cloud Shell on a phone kept arriving damaged —
+# long-press selection stops at the "~" these secrets contain.)
+echo "==> Deploy identity for GitHub Actions (scoped to $RG only)"
 SCOPE="$(az group show --name "$RG" --query id --output tsv)"
-# One line with only the four fields azure/login reads. The full multi-line
-# block broke when copied out of Cloud Shell on a phone: the terminal's
-# wrapping came along as line breaks and the secret stopped being valid JSON.
-CREDS="$(az ad sp create-for-rbac --name "anydown-github-deploy" \
-  --role contributor --scopes "$SCOPE" --json-auth --only-show-errors \
-  | jq -c '{clientId, clientSecret, subscriptionId, tenantId}')"
+DEPLOY_APP="anydown-github-deploy"
+CLIENT_ID="$(az ad app list --display-name "$DEPLOY_APP" --query "[0].appId" --output tsv)"
+if [ -z "$CLIENT_ID" ]; then
+  CLIENT_ID="$(az ad app create --display-name "$DEPLOY_APP" --query appId --output tsv)"
+fi
+az ad sp show --id "$CLIENT_ID" --output none 2>/dev/null \
+  || az ad sp create --id "$CLIENT_ID" --output none
+SP_ID="$(az ad sp show --id "$CLIENT_ID" --query id --output tsv)"
+if [ -z "$(az role assignment list --assignee "$SP_ID" --scope "$SCOPE" --query "[0].id" --output tsv)" ]; then
+  # A brand-new service principal can take a few seconds to be visible.
+  for attempt in 1 2 3 4 5 6; do
+    az role assignment create --assignee-object-id "$SP_ID" \
+      --assignee-principal-type ServicePrincipal \
+      --role Contributor --scope "$SCOPE" --output none && break
+    sleep 10
+  done
+fi
+SUBJECT="repo:$GITHUB_REPO:ref:refs/heads/main"
+if [ -z "$(az ad app federated-credential list --id "$CLIENT_ID" \
+  --query "[?subject=='$SUBJECT'].name" --output tsv)" ]; then
+  az ad app federated-credential create --id "$CLIENT_ID" --output none --parameters "{
+    \"name\": \"github-main\",
+    \"issuer\": \"https://token.actions.githubusercontent.com\",
+    \"subject\": \"$SUBJECT\",
+    \"audiences\": [\"api://AzureADTokenExchange\"]
+  }"
+fi
+TENANT_ID="$(az account show --query tenantId --output tsv)"
+SUBSCRIPTION_ID="$(az account show --query id --output tsv)"
 
 FQDN="$(az containerapp show --name "$APP" --resource-group "$RG" \
   --query properties.configuration.ingress.fqdn --output tsv)"
@@ -107,10 +136,11 @@ cat <<DONE
 Done. Backend URL: https://$FQDN
 
 1) GitHub -> AnyDown -> Settings -> Secrets and variables -> Actions
-   New repository secret  AZURE_CREDENTIALS  = the one line between the dashes:
---------------------------------------------------------------------------
-$CREDS
---------------------------------------------------------------------------
+   -> Variables tab -> New repository variable, three times:
+   AZURE_CLIENT_ID       = $CLIENT_ID
+   AZURE_TENANT_ID       = $TENANT_ID
+   AZURE_SUBSCRIPTION_ID = $SUBSCRIPTION_ID
+   (Not secrets: they identify, they don't authenticate.)
 
 2) Netlify -> your site -> Site configuration -> Environment variables
    VITE_API_BASE = https://$FQDN

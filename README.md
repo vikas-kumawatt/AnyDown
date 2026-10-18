@@ -94,8 +94,12 @@ order; after that, every push to `main` redeploys whatever changed.
    ```
 
    It creates the `anydown` resource group and a Container App that scales to
-   zero (0.5 vCPU / 1 GiB, one replica at most), and prints two things.
-2. Add the printed JSON as the GitHub secret **`AZURE_CREDENTIALS`**.
+   zero (0.5 vCPU / 1 GiB, one replica at most), and lets this repository's
+   `main` branch deploy to it through OIDC — no Azure password is stored
+   anywhere. It prints three IDs and two Netlify values.
+2. Add the three IDs as GitHub repository **variables** (not secrets):
+   **Settings → Secrets and variables → Actions → Variables**:
+   `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`.
 3. **Actions → Backend → Azure → Run workflow.** The first run builds the image
    and then stops, asking you to make the `anydown-api` package public: Azure
    pulls it anonymously. Do that once (the error links to the setting), then

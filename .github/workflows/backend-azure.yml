@@ -14,6 +14,9 @@ on:
 permissions:
   contents: read
   packages: write
+  # Lets azure/login exchange a GitHub-issued token for an Azure one (OIDC),
+  # so no Azure password is stored here.
+  id-token: write
 
 # Never two rollouts at once; a newer push waits for the one in flight.
 concurrency:
@@ -46,14 +49,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check for the Azure credential
+      - name: Check the Azure identity is configured
         env:
-          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
         run: |
-          if [ -z "$AZURE_CREDENTIALS" ]; then
-            echo "::error::The AZURE_CREDENTIALS secret isn't set. Run deploy/azure-setup.sh in Azure Cloud Shell first; see README.md."
-            exit 1
-          fi
+          for name in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID; do
+            if [ -z "${!name}" ]; then
+              echo "::error::The repository variable ${name} isn't set (Settings → Secrets and variables → Actions → Variables). Run deploy/azure-setup.sh in Azure Cloud Shell; it prints all three."
+              exit 1
+            fi
+          done
           # Registry paths must be lowercase.
           echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/anydown-api" >> "$GITHUB_ENV"
 
@@ -93,7 +100,9 @@ jobs:
 
       - uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Roll out
         run: |
