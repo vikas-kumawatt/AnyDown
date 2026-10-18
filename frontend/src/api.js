@@ -58,8 +58,10 @@ export async function resolveMedia(url, signal) {
     throw new ApiError(
       code,
       FRIENDLY[code] || body?.message || 'Something went wrong.',
-      // Only worth surfacing when it says more than the friendly line does.
-      FRIENDLY[code] ? body?.message : undefined,
+      // The underlying error verbatim when the server has it (yt-dlp's own
+      // words); otherwise the server's message, when it says more than the
+      // friendly line does.
+      body?.detail || (FRIENDLY[code] ? body?.message : undefined),
     )
   }
   return body

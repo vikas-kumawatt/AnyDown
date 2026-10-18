@@ -22,6 +22,7 @@ class ErrorCode(str, Enum):
     UPSTREAM_ERROR = "UPSTREAM_ERROR"
     INVALID_REQUEST = "INVALID_REQUEST"
     UNAUTHORIZED = "UNAUTHORIZED"
+    BLOCKED = "BLOCKED"
 
     def __str__(self) -> str:
         return self.value
@@ -30,11 +31,19 @@ class ErrorCode(str, Enum):
 class AppError(Exception):
     """Raised anywhere in the app; converted to the standard JSON shape."""
 
-    def __init__(self, code: ErrorCode, message: str, status_code: int = 400) -> None:
+    def __init__(
+        self,
+        code: ErrorCode,
+        message: str,
+        status_code: int = 400,
+        detail: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.status_code = status_code
+        # The underlying error in its own words, for "Show details".
+        self.detail = detail
 
 
 # Substrings yt-dlp emits when content exists but needs a logged-in session.
@@ -56,6 +65,15 @@ _PRIVATE_PATTERNS = (
     "not authorized",
     "this account is",
     "follow this account",
+)
+
+# The platform refusing *this server* rather than the content being private:
+# YouTube answers datacenter addresses with "Sign in to confirm you're not a
+# bot". Checked before _PRIVATE_PATTERNS, whose "sign in" would otherwise
+# report a public video as private.
+_BLOCKED_PATTERNS = (
+    "not a bot",
+    "sign in to confirm",
 )
 
 _UNSUPPORTED_PATTERNS = (
@@ -88,6 +106,13 @@ def classify_extractor_error(raw_message: str) -> tuple[ErrorCode, str]:
             ErrorCode.UNSUPPORTED_URL,
             "This link isn't from a supported platform, or isn't a media page.",
         )
+    if any(pattern in text for pattern in _BLOCKED_PATTERNS):
+        return (
+            ErrorCode.BLOCKED,
+            "The platform is refusing this server: it asks cloud servers to prove "
+            "they aren't a bot. The content itself is fine. The Android app runs "
+            "from your phone and isn't affected.",
+        )
     if any(pattern in text for pattern in _PRIVATE_PATTERNS):
         return (
             ErrorCode.PRIVATE_CONTENT,
@@ -110,3 +135,8 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 def _strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
+
+
+def clean_detail(raw_message: str) -> str:
+    """yt-dlp's own message, fit to show a person: no colour codes, no padding."""
+    return _strip_ansi(raw_message).strip()

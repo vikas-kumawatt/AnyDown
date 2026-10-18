@@ -239,3 +239,13 @@ def test_cookies_follow_their_media_url_only() -> None:
     first, second = info["formats"]
     assert first["http_headers"] == {"Referer": "r", "Cookie": "tt_chain_token=abc"}
     assert "http_headers" not in second, "a cookie must never leak to another host"
+
+
+def test_bot_check_is_not_reported_as_private_content() -> None:
+    """YouTube's datacenter block says "sign in", but the video is public."""
+    code, message = classify_extractor_error(
+        "ERROR: [youtube] ugPTjihn0Ao: Sign in to confirm you’re not a bot. "
+        "Use --cookies-from-browser or --cookies for the authentication."
+    )
+    assert code is ErrorCode.BLOCKED
+    assert "isn't affected" in message

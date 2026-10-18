@@ -39,3 +39,5 @@ class HealthResponse(BaseModel):
 class ErrorResponse(BaseModel):
     error: str
     message: str
+    # The underlying error verbatim, when there is one (e.g. yt-dlp's text).
+    detail: str | None = None
