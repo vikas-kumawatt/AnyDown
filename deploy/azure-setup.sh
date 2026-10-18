@@ -114,16 +114,26 @@ if [ -z "$(az role assignment list --assignee "$SP_ID" --scope "$SCOPE" --query 
     sleep 10
   done
 fi
-SUBJECT="repo:$GITHUB_REPO:ref:refs/heads/main"
-if [ -z "$(az ad app federated-credential list --id "$CLIENT_ID" \
-  --query "[?subject=='$SUBJECT'].name" --output tsv)" ]; then
-  az ad app federated-credential create --id "$CLIENT_ID" --output none --parameters "{
-    \"name\": \"github-main\",
-    \"issuer\": \"https://token.actions.githubusercontent.com\",
-    \"subject\": \"$SUBJECT\",
-    \"audiences\": [\"api://AzureADTokenExchange\"]
-  }"
-fi
+# GitHub names the repository in its token one of two ways: plain
+# "owner/repo", or — for accounts on immutable subject claims — with numeric
+# IDs, "owner@<owner-id>/repo@<repo-id>". Azure needs an exact match, so trust
+# both. The IDs come from GitHub's public API.
+REPO_IDS="$(curl -fsS "https://api.github.com/repos/$GITHUB_REPO" \
+  | jq -r '"\(.owner.login)@\(.owner.id)/\(.name)@\(.id)"')"
+add_subject() {
+  local name="$1" subject="$2"
+  if [ -z "$(az ad app federated-credential list --id "$CLIENT_ID" \
+    --query "[?subject=='$subject'].name" --output tsv)" ]; then
+    az ad app federated-credential create --id "$CLIENT_ID" --output none --parameters "{
+      \"name\": \"$name\",
+      \"issuer\": \"https://token.actions.githubusercontent.com\",
+      \"subject\": \"$subject\",
+      \"audiences\": [\"api://AzureADTokenExchange\"]
+    }"
+  fi
+}
+add_subject github-main "repo:$GITHUB_REPO:ref:refs/heads/main"
+add_subject github-main-ids "repo:$REPO_IDS:ref:refs/heads/main"
 TENANT_ID="$(az account show --query tenantId --output tsv)"
 SUBSCRIPTION_ID="$(az account show --query id --output tsv)"
 
