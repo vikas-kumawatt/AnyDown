@@ -224,3 +224,25 @@ def test_openapi_and_docs_are_disabled(client: TestClient) -> None:
 def test_warm_up_runs_offline() -> None:
     """Startup warm-up must never need the network, or a cold start could hang."""
     extractor.warm_up()
+
+
+def test_rejected_app_key_still_carries_cors_headers(
+    client: TestClient, monkeypatch
+) -> None:
+    """Without CORS headers the browser hides the 401 as a network failure.
+
+    The site then said "Couldn't reach the server" for what was really a
+    wrong app key, which is the one error a person can actually fix.
+    """
+    from app import main
+
+    monkeypatch.setattr(main.settings, "app_key", "right-key")
+    response = client.post(
+        "/api/resolve",
+        json={"url": YT_URL},
+        headers={"Origin": "http://testserver", "X-App-Key": "wrong-key"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error"] == "UNAUTHORIZED"
+    assert response.headers.get("access-control-allow-origin") == "http://testserver"

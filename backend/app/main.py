@@ -123,17 +123,6 @@ app = FastAPI(
 
 app.state.limiter = limiter
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origin_list,
-    allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type", "X-App-Key"],
-    expose_headers=["Content-Disposition", "X-Fallback-Applied"],
-    max_age=600,
-)
-
-
 # --------------------------------------------------------------------------
 # Optional shared secret (PRD section 9 upgrade path; off unless APP_APP_KEY set)
 # --------------------------------------------------------------------------
@@ -150,6 +139,20 @@ async def shared_secret_guard(request: Request, call_next):
                     ErrorCode.UNAUTHORIZED, "Missing or invalid app key.", 401
                 )
     return await call_next(request)
+
+
+# Registered after the guard so it wraps it: the last middleware added runs
+# first. The other way round, the guard's 401 left without CORS headers, and
+# the browser reported a wrong app key as "couldn't reach the server".
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origin_list,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "X-App-Key"],
+    expose_headers=["Content-Disposition", "X-Fallback-Applied"],
+    max_age=600,
+)
 
 
 # --------------------------------------------------------------------------
