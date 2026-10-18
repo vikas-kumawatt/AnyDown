@@ -7,6 +7,12 @@
 
 [build.environment]
   NODE_VERSION = "20"
+  # VITE_APP_KEY is public by design: the browser sends it with every request,
+  # so Vite has to put it in the bundle. It keeps strangers off the API, it
+  # doesn't hide anything from visitors. Netlify's secret scanner sees a
+  # "secret" env var in the build output and fails the deploy; tell it this
+  # one is expected. Every other variable is still scanned.
+  SECRETS_SCAN_OMIT_KEYS = "VITE_APP_KEY"
 
 # SPA fallback.
 [[redirects]]
